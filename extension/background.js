@@ -59,7 +59,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           chrome.tabs.sendMessage(tabId, {
             type: 'update-subtitle-mode',
             targetLang: message.config.targetLang,
-            showBilingual: message.config.showBilingual
+            showBilingual: message.config.showBilingual,
+            dubbingEnabled: !!message.config.dubbingEnabled,
+            prerollSync: message.config.prerollSync !== false
           }).catch(() => {});
         }
       }
@@ -68,6 +70,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
   
+  if (message.type === 'video-control') {
+    // Forward video playback control (pause/seek) to offscreen dubbing queue
+    chrome.runtime.sendMessage({
+      target: 'offscreen',
+      type: 'video-control',
+      action: message.action
+    }).catch(() => {});
+    return;
+  }
+
   // Messages from Offscreen
   if (message.target === 'background') {
     if (message.type === 'websocket-connected') {
@@ -99,6 +111,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
     }
     
+    if (message.type === 'dubbing-ready') {
+      const tabId = activeTabId;
+      if (tabId) {
+        chrome.tabs.sendMessage(tabId, {
+          type: 'dubbing-ready',
+          data: message.data
+        }).catch(() => {});
+      }
+    }
+    
     if (message.type === 'offscreen-error') {
       console.error("Offscreen capture error:", message.error);
       stopCapture();
@@ -122,7 +144,7 @@ async function startCapture(streamId, tabId) {
     const storage = await chrome.storage.local.get([
       'ollamaUrl', 'modelName', 'deepseekKey', 'minSilence', 'maxSpeech',
       'showBilingual', 'sourceLang', 'targetLang', 'promptPreset',
-      'dubbingEnabled', 'ttsVoice', 'duckingVolume'
+      'dubbingEnabled', 'ttsVoice', 'duckingVolume', 'prerollSync'
     ]);
     const config = {
       ollamaUrl: storage.ollamaUrl || 'http://localhost:11434',
@@ -135,6 +157,7 @@ async function startCapture(streamId, tabId) {
       promptPreset: storage.promptPreset || 'general',
       preset: storage.promptPreset || 'general',
       dubbingEnabled: !!storage.dubbingEnabled,
+      prerollSync: storage.prerollSync !== false,
       ttsVoice: storage.ttsVoice || 'yunxi',
       duckingVolume: storage.duckingVolume !== undefined ? storage.duckingVolume : 0.10
     };
@@ -154,7 +177,9 @@ async function startCapture(streamId, tabId) {
     chrome.tabs.sendMessage(activeTabId, { 
       type: 'show-subtitles',
       targetLang: config.targetLang,
-      showBilingual: showBilingual
+      showBilingual: showBilingual,
+      dubbingEnabled: config.dubbingEnabled,
+      prerollSync: config.prerollSync
     }).catch(() => {
       // Content script might not be loaded yet, ignoring
     });

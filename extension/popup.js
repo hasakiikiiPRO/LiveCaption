@@ -24,6 +24,7 @@ const dubbingSettingsPanel = document.getElementById('dubbing-settings-panel');
 const ttsVoiceInput = document.getElementById('tts-voice');
 const duckingVolumeInput = document.getElementById('ducking-volume');
 const duckingVolumeVal = document.getElementById('ducking-volume-val');
+const prerollSyncInput = document.getElementById('preroll-sync');
 
 let isCapturing = false;
 
@@ -78,6 +79,7 @@ const i18n = {
     titleDubbing: 'AI 同傳配音 (Audio Dubbing)',
     labelDubbingEnabled: '啟用即時同傳配音 (聽取代讀)',
     labelTtsVoice: '配音音色',
+    labelPrerollSync: '智能音畫鎖步對齊 (開頭微頓1-2秒預熱，確保全程音畫同步)',
     optVoiceYunxi: '雲希 (男聲 • 自然解說·紀錄片)',
     optVoiceXiaoxiao: '曉曉 (女聲 • 溫柔知性·清晰)',
     optVoiceYunjian: '雲健 (男聲 • 激情解說·影視)',
@@ -140,6 +142,7 @@ const i18n = {
     titleDubbing: 'AI 同传配音 (Audio Dubbing)',
     labelDubbingEnabled: '启用实时同传配音 (听取代读)',
     labelTtsVoice: '配音音色',
+    labelPrerollSync: '智能音画锁步对齐 (开头微顿1-2秒预热，确保全程音画同步)',
     optVoiceYunxi: '云希 (男声 • 自然解说·纪录片)',
     optVoiceXiaoxiao: '晓晓 (女声 • 温柔知性·清晰)',
     optVoiceYunjian: '云健 (男声 • 激情解说·影视)',
@@ -202,6 +205,7 @@ const i18n = {
     titleDubbing: 'AI Audio Dubbing',
     labelDubbingEnabled: 'Enable Real-time AI Dubbing',
     labelTtsVoice: 'Dubbing Voice',
+    labelPrerollSync: 'Smart Lock-step Sync (1-2s pre-roll buffer to align video & dubbing)',
     optVoiceYunxi: 'Yunxi (Male • Documentary / Natural)',
     optVoiceXiaoxiao: 'Xiaoxiao (Female • Warm & Clear)',
     optVoiceYunjian: 'Yunjian (Male • Passionate)',
@@ -264,6 +268,7 @@ const i18n = {
     titleDubbing: 'AIリアルタイム吹き替え (Dubbing)',
     labelDubbingEnabled: 'AI同時吹き替えを有効にする',
     labelTtsVoice: '吹き替え音声',
+    labelPrerollSync: 'スマート同期アライメント (冒頭1〜2秒のバッファで映像と音声を完全同期)',
     optVoiceYunxi: 'Yunxi (男性 • 解説・ドキュメンタリー)',
     optVoiceXiaoxiao: 'Xiaoxiao (女性 • 穏やか・クリア)',
     optVoiceYunjian: 'Yunjian (男性 • 情熱的)',
@@ -326,6 +331,7 @@ const i18n = {
     titleDubbing: 'AI 실시간 더빙 (Audio Dubbing)',
     labelDubbingEnabled: '실시간 AI 더빙 활성화',
     labelTtsVoice: '더빙 목소리',
+    labelPrerollSync: '스마트 싱크 정렬 (초반 1-2초 버퍼로 영상과 음성 완벽 일치)',
     optVoiceYunxi: 'Yunxi (남성 • 다큐멘터리/자연스러운 해설)',
     optVoiceXiaoxiao: 'Xiaoxiao (여성 • 다정하고 명확한 음성)',
     optVoiceYunjian: 'Yunjian (남성 • 열정적인 해설)',
@@ -468,6 +474,9 @@ function applyLanguage(lang) {
   if (document.getElementById('title-dubbing')) {
     document.getElementById('title-dubbing').textContent = getTranslation(lang, 'titleDubbing');
     document.getElementById('label-dubbing-enabled').textContent = getTranslation(lang, 'labelDubbingEnabled');
+    if (document.getElementById('label-preroll-sync')) {
+      document.getElementById('label-preroll-sync').textContent = getTranslation(lang, 'labelPrerollSync');
+    }
     document.getElementById('label-tts-voice').textContent = getTranslation(lang, 'labelTtsVoice');
     document.getElementById('opt-voice-yunxi').textContent = getTranslation(lang, 'optVoiceYunxi');
     document.getElementById('opt-voice-xiaoxiao').textContent = getTranslation(lang, 'optVoiceXiaoxiao');
@@ -523,6 +532,10 @@ chrome.storage.local.get([
   if (result.fontSize) fontSizeInput.value = result.fontSize;
   if (result.historyLines !== undefined) historyLinesInput.value = result.historyLines;
 
+  if (prerollSyncInput) {
+    prerollSyncInput.checked = (result.prerollSync !== false);
+  }
+
   if (dubbingEnabledInput) {
     dubbingEnabledInput.checked = !!result.dubbingEnabled;
     dubbingSettingsPanel.style.display = dubbingEnabledInput.checked ? 'block' : 'none';
@@ -556,6 +569,7 @@ const saveSettings = () => {
     promptPreset: promptPresetInput ? promptPresetInput.value : 'general',
     preset: promptPresetInput ? promptPresetInput.value : 'general',
     dubbingEnabled: dubbingEnabledInput ? dubbingEnabledInput.checked : false,
+    prerollSync: prerollSyncInput ? prerollSyncInput.checked : true,
     ttsVoice: ttsVoiceInput ? ttsVoiceInput.value : 'yunxi',
     duckingVolume: duckingVolumeInput ? parseFloat(duckingVolumeInput.value) : 0.10,
     showBilingual: showBilingualInput.checked,
@@ -637,6 +651,9 @@ if (dubbingEnabledInput) {
 }
 if (ttsVoiceInput) {
   ttsVoiceInput.addEventListener('change', saveSettings);
+}
+if (prerollSyncInput) {
+  prerollSyncInput.addEventListener('change', saveSettings);
 }
 if (duckingVolumeInput) {
   duckingVolumeInput.addEventListener('input', () => {

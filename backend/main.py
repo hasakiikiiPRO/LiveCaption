@@ -202,27 +202,29 @@ TTS_VOICE_MAP = {
 DEFAULT_TTS_VOICE = "zh-CN-YunxiNeural"
 
 async def synthesize_edge_tts(text: str, voice: str = None, rate: str = "+0%") -> bytes:
-    """使用 Edge-TTS 合成 MP3 音訊字節，優先走代理並自帶 1 次快速重試，超時限制嚴格把控，失敗靜默跳過不阻礙字幕。"""
+    """使用 Edge-TTS 合成 MP3 音訊字節：第1次走代理，若遇網絡超時立即自動切換直連兜底，雙軌抗抖動。"""
     if not text or not text.strip():
         return b""
     clean_text = text.strip()
     target_voice = TTS_VOICE_MAP.get(voice, voice or DEFAULT_TTS_VOICE)
     proxy_url = os.environ.get("HTTP_PROXY") or "http://127.0.0.1:7897"
 
-    for attempt in range(2):
+    # 双轨尝试：第一次代理，第二次直连
+    attempts = [proxy_url, None]
+    for idx, p in enumerate(attempts):
         try:
-            comm = edge_tts.Communicate(clean_text, target_voice, rate=rate, proxy=proxy_url, connect_timeout=4, receive_timeout=6)
+            comm = edge_tts.Communicate(clean_text, target_voice, rate=rate, proxy=p, connect_timeout=3, receive_timeout=5)
             buf = bytearray()
-            async with asyncio.timeout(5.0):
+            async with asyncio.timeout(4.0):
                 async for chunk in comm.stream():
                     if chunk["type"] == "audio":
                         buf.extend(chunk["data"])
             if buf:
                 return bytes(buf)
         except Exception as e:
-            if attempt == 1:
+            if idx == len(attempts) - 1:
                 print(f"Edge-TTS 合成失敗（{type(e).__name__}）: {e}")
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.05)
     return b""
 
 

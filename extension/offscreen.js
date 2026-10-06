@@ -23,6 +23,22 @@ chrome.runtime.onMessage.addListener(async (message) => {
     config = message.config;
     sendConfigToBackend();
   }
+
+  if (message.type === 'video-control') {
+    if (message.action === 'seek' || message.action === 'stop-stale') {
+      dubbingQueue = [];
+      if (currentDubSource) {
+        try { currentDubSource.stop(); } catch (e) {}
+        currentDubSource = null;
+      }
+      isPlayingDub = false;
+      if (duckingGain && playbackContext && playbackContext.state !== 'closed') {
+        const now = playbackContext.currentTime;
+        duckingGain.gain.cancelScheduledValues(now);
+        duckingGain.gain.setValueAtTime(1.0, now);
+      }
+    }
+  }
 });
 
 async function startRecording(streamId) {
@@ -206,6 +222,26 @@ async function playNextDubbing() {
     }
     
     const audioBuffer = await playbackContext.decodeAudioData(bytes.buffer.slice(0));
+    const dubDuration = audioBuffer.duration;
+    const origDuration = (item.duration && Number(item.duration) > 0) ? Number(item.duration) : dubDuration;
+    
+    // 自適應語速鎖步：若配音長度超過原聲，微調語速 (1.0x - 1.25x) 確保在原句結束前及時念完
+    let speedRatio = 1.0;
+    if (dubDuration > origDuration && origDuration > 0.5) {
+      speedRatio = Math.min(1.25, Math.max(1.0, dubDuration / origDuration));
+    }
+
+    // 發送配音就緒訊號給標籤頁，用於解鎖開頭預熱對齊微頓
+    chrome.runtime.sendMessage({
+      target: 'background',
+      type: 'dubbing-ready',
+      data: {
+        text: item.text,
+        start: item.start,
+        duration: origDuration,
+        speedRatio: speedRatio
+      }
+    });
     
     // 平滑壓低原聲音量 (80ms 快速淡出到 duckingVolume)
     if (duckingGain) {
@@ -216,6 +252,7 @@ async function playNextDubbing() {
     
     const source = playbackContext.createBufferSource();
     source.buffer = audioBuffer;
+    source.playbackRate.value = speedRatio;
     source.connect(playbackContext.destination);
     currentDubSource = source;
     isPlayingDub = true;
