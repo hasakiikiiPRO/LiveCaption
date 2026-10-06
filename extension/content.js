@@ -4,12 +4,8 @@ let subtitleHistory = [];
 let maxHistoryLines = 0; // 0 = only show latest, 1 = latest + 1 history, 2 = latest + 2 history
 let isDragAttached = false;
 
-// 同傳配音音畫對齊控制變數
+// 同傳配音狀態變數 (永不擅自暫停用戶視頻，保證視頻 100% 流暢播放)
 let isDubbingActive = false;
-let isPrerollSyncEnabled = true;
-let needInitialPreroll = false;
-let prerollBuffering = false;
-let prerollTimer = null;
 
 function getActiveVideo() {
   const videos = Array.from(document.querySelectorAll('video'));
@@ -25,7 +21,6 @@ function attachVideoListeners(video) {
   video.addEventListener('seeking', () => {
     if (isDubbingActive) {
       chrome.runtime.sendMessage({ type: 'video-control', action: 'seek' }).catch(() => {});
-      needInitialPreroll = isPrerollSyncEnabled;
     }
   });
 }
@@ -298,21 +293,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const targetLang = message.targetLang || 'none';
     const showBilingual = message.showBilingual !== false;
     
-    // 更新配音對齊模式標記 (純字幕模式保持 100% 原始極速，不觸發任何視頻控制)
+    // 更新配音模式標記 (視頻播放 100% 由用戶掌握，絕不強行暫停視頻)
     isDubbingActive = !!message.dubbingEnabled;
-    isPrerollSyncEnabled = (message.prerollSync !== false);
-    if (isDubbingActive && isPrerollSyncEnabled) {
-      needInitialPreroll = true;
+    if (isDubbingActive) {
       const vid = getActiveVideo();
       if (vid) attachVideoListeners(vid);
-    } else {
-      needInitialPreroll = false;
-      if (prerollBuffering) {
-        prerollBuffering = false;
-        if (prerollTimer) clearTimeout(prerollTimer);
-        const vid = getActiveVideo();
-        if (vid && vid.paused) vid.play().catch(() => {});
-      }
     }
     
     // Push initial status placeholder
@@ -341,55 +326,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     
     // Clear initial status placeholders if any
     subtitleHistory = subtitleHistory.filter(item => 
-      item.text_zh !== '語音系統已連線，準備辨識中...' &&
-      item.text_zh !== '⌛ 正在預熱音畫同步緩衝 (約1-2秒)...'
+      item.text_zh !== '語音系統已連線，準備辨識中...'
     );
-
-    // 智能音畫鎖步對齊：若開啟配音且需要開頭預熱微頓，在第1句話切出時微頓視頻等待配音就緒
-    if (isDubbingActive && isPrerollSyncEnabled && needInitialPreroll && data.text_raw) {
-      const vid = getActiveVideo();
-      if (vid && !vid.paused) {
-        needInitialPreroll = false;
-        prerollBuffering = true;
-        try { vid.pause(); } catch (e) {}
-        
-        subtitleHistory = [{
-          text_raw: '',
-          text_zh: '⌛ 正在預熱音畫同步緩衝 (約1-2秒)...',
-          start: data.start,
-          duration: 3
-        }];
-        renderHistorySubtitles(targetLang, showBilingual);
-        
-        if (prerollTimer) clearTimeout(prerollTimer);
-        prerollTimer = setTimeout(() => {
-          // 3.5秒超時保底自動恢復播放，杜絕卡頓死鎖
-          if (prerollBuffering) {
-            prerollBuffering = false;
-            if (vid && vid.paused) vid.play().catch(() => {});
-          }
-        }, 3500);
-      }
-    }
     
-    // Check for duplicate segment updates (same start time)
-    let displayZh = data.text_zh;
-    if (prerollBuffering && data.text_zh === '⌛ 翻譯中...') {
-      displayZh = '⌛ 正在預熱音畫同步緩衝 (約1-2秒)...';
-    }
-
     const duplicateIndex = subtitleHistory.findIndex(item => item.start === data.start);
     if (duplicateIndex !== -1) {
       subtitleHistory[duplicateIndex] = {
         text_raw: data.text_raw,
-        text_zh: displayZh,
+        text_zh: data.text_zh,
         duration: data.duration,
         start: data.start
       };
     } else {
       subtitleHistory.push({
         text_raw: data.text_raw,
-        text_zh: displayZh,
+        text_zh: data.text_zh,
         duration: data.duration,
         start: data.start
       });
@@ -409,15 +360,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   
   if (message.type === 'dubbing-ready') {
-    // 收到配音就緒訊號：解除開頭預熱微頓，視頻與配音同步起跑！
-    if (prerollBuffering) {
-      prerollBuffering = false;
-      if (prerollTimer) clearTimeout(prerollTimer);
-      const vid = getActiveVideo();
-      if (vid && vid.paused) {
-        vid.play().catch(() => {});
-      }
-    }
+    // 配音已就緒
   }
 
   if (message.type === 'toggle-bilingual' || message.type === 'update-subtitle-mode') {

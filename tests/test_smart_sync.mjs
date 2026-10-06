@@ -90,52 +90,33 @@ try {
   console.log('-> PASS: Pure subtitle mode did not interfere with video playback.');
 
   // ==========================================
-  // 测试 2：同传配音开启时，智能预热微顿与就绪对齐解锁
+  // 测试 2：同传配音开启时，绝不暂停或中断视频播放 (保证 100% 流畅)
   // ==========================================
-  console.log('[TEST 2] Testing dubbing mode with Smart Pre-roll Sync...');
+  console.log('[TEST 2] Testing dubbing mode video non-interference...');
   await page.evaluate(() => {
     window.contentMsgListener({
       type: 'show-subtitles',
       targetLang: 'zh-CN',
       showBilingual: true,
-      dubbingEnabled: true,
-      prerollSync: true
+      dubbingEnabled: true
     });
-    // 第一句话到来 (通常先是 ⌛ 翻譯中...)
+    // 第一句话到来
     window.contentMsgListener({
       type: 'render-subtitle',
-      data: { text_raw: 'This is a long clinical sentence.', text_zh: '⌛ 翻譯中...', start: 2.5, duration: 3.0 },
+      data: { text_raw: 'This is a clinical sentence.', text_zh: '这是一个长句。', start: 2.5, duration: 3.0 },
       targetLang: 'zh-CN',
       showBilingual: true
     });
   });
 
-  // 验证在第一句话到来时，视频被自动轻轻暂停，等待配音缓冲
-  const isPausedForBuffering = await page.evaluate(() => document.getElementById('test-video').paused);
-  const containerText = await page.evaluate(() => document.getElementById('studio0808-subtitle-container').innerText);
-  console.log('-> Video paused for pre-roll buffer:', isPausedForBuffering);
-  console.log('-> Subtitle overlay status text:', containerText);
-  assert.equal(isPausedForBuffering, true, 'Video should be briefly paused for initial pre-roll buffer');
-  assert.ok(containerText.includes('預熱') || containerText.includes('同步'), 'Should display pre-roll sync indicator');
-
-  // 模拟后台 Edge-TTS 配音就绪信号 dubbing-ready 送达
-  console.log('[TEST 3] Simulating dubbing-ready event...');
-  await page.evaluate(() => {
-    window.contentMsgListener({
-      type: 'dubbing-ready',
-      data: { text: '这是一个长句。', start: 2.5, duration: 3.0 }
-    });
-  });
-
-  // 验证视频立刻自动恢复播放，音画同频起跑！
-  const isResumedPlaying = await page.evaluate(() => !document.getElementById('test-video').paused);
-  assert.equal(isResumedPlaying, true, 'Video should immediately resume playing lock-step with dubbing');
-  console.log('-> PASS: Video resumed playing lock-step with dubbing audio!');
+  const isStillPlayingInDubbingMode = await page.evaluate(() => !document.getElementById('test-video').paused);
+  assert.equal(isStillPlayingInDubbingMode, true, 'Video must NEVER be paused, even in dubbing mode!');
+  console.log('-> PASS: Video continues smooth playback without being paused.');
 
   // ==========================================
-  // 测试 4：模拟用户拖拽进度条 (seeking)，验证触发旧配音清空
+  // 测试 3：模拟用户拖拽进度条 (seeking)，验证触发旧配音清空
   // ==========================================
-  console.log('[TEST 4] Simulating user seeking video timeline...');
+  console.log('[TEST 3] Simulating user seeking video timeline...');
   await page.evaluate(() => {
     const video = document.getElementById('test-video');
     video.dispatchEvent(new Event('seeking'));
@@ -146,7 +127,7 @@ try {
   assert.equal(hasSeekAction, true, 'Should send video-control:seek to clear stale queue on seeking');
   console.log('-> PASS: Seeking cleanly triggers stale dubbing purge signal.');
 
-  console.log('\nAll Smart Lock-step Sync integration tests PASSED!');
+  console.log('\nAll Smooth Dubbing non-interference tests PASSED!');
 } finally {
   await browser.close();
 }

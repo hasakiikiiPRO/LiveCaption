@@ -24,7 +24,6 @@ const dubbingSettingsPanel = document.getElementById('dubbing-settings-panel');
 const ttsVoiceInput = document.getElementById('tts-voice');
 const duckingVolumeInput = document.getElementById('ducking-volume');
 const duckingVolumeVal = document.getElementById('ducking-volume-val');
-const prerollSyncInput = document.getElementById('preroll-sync');
 
 let isCapturing = false;
 
@@ -532,10 +531,6 @@ chrome.storage.local.get([
   if (result.fontSize) fontSizeInput.value = result.fontSize;
   if (result.historyLines !== undefined) historyLinesInput.value = result.historyLines;
 
-  if (prerollSyncInput) {
-    prerollSyncInput.checked = (result.prerollSync !== false);
-  }
-
   if (dubbingEnabledInput) {
     dubbingEnabledInput.checked = !!result.dubbingEnabled;
     dubbingSettingsPanel.style.display = dubbingEnabledInput.checked ? 'block' : 'none';
@@ -569,7 +564,6 @@ const saveSettings = () => {
     promptPreset: promptPresetInput ? promptPresetInput.value : 'general',
     preset: promptPresetInput ? promptPresetInput.value : 'general',
     dubbingEnabled: dubbingEnabledInput ? dubbingEnabledInput.checked : false,
-    prerollSync: prerollSyncInput ? prerollSyncInput.checked : true,
     ttsVoice: ttsVoiceInput ? ttsVoiceInput.value : 'yunxi',
     duckingVolume: duckingVolumeInput ? parseFloat(duckingVolumeInput.value) : 0.10,
     showBilingual: showBilingualInput.checked,
@@ -651,9 +645,6 @@ if (dubbingEnabledInput) {
 }
 if (ttsVoiceInput) {
   ttsVoiceInput.addEventListener('change', saveSettings);
-}
-if (prerollSyncInput) {
-  prerollSyncInput.addEventListener('change', saveSettings);
 }
 if (duckingVolumeInput) {
   duckingVolumeInput.addEventListener('input', () => {
