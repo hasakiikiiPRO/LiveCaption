@@ -80,25 +80,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return;
   }
 
-  if (message.type === 'request-batch-dubbing') {
-    chrome.runtime.sendMessage({
-      target: 'offscreen',
-      type: 'request-batch-dubbing',
-      items: message.items
-    }).catch(() => {});
-    return;
-  }
-
-  if (message.type === 'play-scheduled-dub') {
-    chrome.runtime.sendMessage({
-      target: 'offscreen',
-      type: 'play-scheduled-dub',
-      audio_base64: message.audio_base64,
-      duration: message.duration
-    }).catch(() => {});
-    return;
-  }
-
   // Messages from Offscreen
   if (message.target === 'background') {
     if (message.type === 'websocket-connected') {
@@ -136,16 +117,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         chrome.tabs.sendMessage(tabId, {
           type: 'dubbing-ready',
           data: message.data
-        }).catch(() => {});
-      }
-    }
-
-    if (message.type === 'batch-dubbing-data') {
-      const tabId = activeTabId;
-      if (tabId) {
-        chrome.tabs.sendMessage(tabId, {
-          type: 'batch-dubbing-data',
-          items: message.items
         }).catch(() => {});
       }
     }
