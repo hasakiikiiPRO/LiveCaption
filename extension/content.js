@@ -7,12 +7,224 @@ let isDragAttached = false;
 // 同傳配音狀態變數 (永不擅自暫停用戶視頻，保證視頻 100% 流暢播放)
 let isDubbingActive = false;
 
+// ============================================================
+// YouTube 精準字幕軌預取與毫秒對齊配音引擎 (YouTube Dubbing Fast-Path)
+// ============================================================
+class YouTubeTranscriptDubber {
+  constructor() {
+    this.enabled = false;
+    this.video = null;
+    this.sentences = [];
+    this.sentenceMap = new Map();
+    this.dubbingCache = new Map();
+    this.requestedIds = new Set();
+    this.playedIds = new Set();
+    this.loopTimer = null;
+    this.currentTrackUrl = null;
+  }
+
+  isYouTube() {
+    return window.location.hostname.includes('youtube.com') && window.location.pathname.includes('/watch');
+  }
+
+  async probeCaptionTracks() {
+    return new Promise((resolve) => {
+      const handleMsg = (e) => {
+        if (e.data && e.data.type === '__LC_YT_PLAYER_RESPONSE__') {
+          window.removeEventListener('message', handleMsg);
+          resolve(e.data.response);
+        }
+      };
+      window.addEventListener('message', handleMsg);
+      const s = document.createElement('script');
+      s.textContent = `
+        (function() {
+          try {
+            const player = document.getElementById('movie_player');
+            const resp = (player && typeof player.getPlayerResponse === 'function')
+              ? player.getPlayerResponse()
+              : window.ytInitialPlayerResponse;
+            window.postMessage({ type: '__LC_YT_PLAYER_RESPONSE__', response: resp }, '*');
+          } catch(e) {
+            window.postMessage({ type: '__LC_YT_PLAYER_RESPONSE__', response: null }, '*');
+          }
+        })();
+      `;
+      (document.head || document.documentElement).appendChild(s);
+      s.remove();
+      setTimeout(() => {
+        window.removeEventListener('message', handleMsg);
+        resolve(null);
+      }, 1200);
+    });
+  }
+
+  mergeEvents(events) {
+    if (!events || !Array.isArray(events)) return [];
+    const list = [];
+    let cur = null;
+    let idCounter = 1;
+
+    for (const e of events) {
+      if (!e.segs) continue;
+      const t = e.segs.map(s => s.utf8 || '').join('').replace(/\n/g, ' ').trim();
+      if (!t) continue;
+      const start = (e.tStartMs || 0) / 1000.0;
+      const dur = (e.dDurationMs || 0) / 1000.0;
+
+      if (!cur) {
+        cur = { id: idCounter++, text: t, start: start, duration: dur };
+      } else {
+        const gap = start - (cur.start + cur.duration);
+        const hasEndPunct = /[.!?。！？]$/.test(cur.text);
+        if (hasEndPunct || gap > 0.8 || cur.duration > 4.5) {
+          list.push(cur);
+          cur = { id: idCounter++, text: t, start: start, duration: dur };
+        } else {
+          cur.text += ' ' + t;
+          cur.duration = (start + dur) - cur.start;
+        }
+      }
+    }
+    if (cur) list.push(cur);
+    return list;
+  }
+
+  async loadTranscript() {
+    if (!this.isYouTube()) return false;
+    const resp = await this.probeCaptionTracks();
+    const tracks = resp?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+    if (!tracks || tracks.length === 0) return false;
+
+    const track = tracks.find(t => t.languageCode === 'en' || t.languageCode?.startsWith('en')) || tracks[0];
+    if (!track || !track.baseUrl) return false;
+    if (this.currentTrackUrl === track.baseUrl && this.sentences.length > 0) return true;
+
+    try {
+      const r = await fetch(track.baseUrl + '&fmt=json3');
+      const data = await r.json();
+      this.sentences = this.mergeEvents(data.events);
+      this.sentenceMap.clear();
+      this.sentences.forEach(s => this.sentenceMap.set(s.id, s));
+      this.currentTrackUrl = track.baseUrl;
+      console.log(`LiveCaption: 成功提取 YouTube 字幕軌，共重組 ${this.sentences.length} 句對白！`);
+      return true;
+    } catch(e) {
+      console.warn("LiveCaption: 抓取字幕數據失敗:", e);
+      return false;
+    }
+  }
+
+  start(video) {
+    this.video = video;
+    this.enabled = true;
+    if (this.loopTimer) clearInterval(this.loopTimer);
+
+    this.loopTimer = setInterval(() => {
+      if (!this.enabled || !this.video) return;
+      this.checkAndPrefetch();
+      this.checkAndPlay();
+    }, 150);
+  }
+
+  stop() {
+    this.enabled = false;
+    if (this.loopTimer) clearInterval(this.loopTimer);
+    this.loopTimer = null;
+  }
+
+  checkAndPrefetch() {
+    if (!this.video || this.sentences.length === 0) return;
+    const curTime = this.video.currentTime;
+    const windowEnd = curTime + 25.0;
+
+    const upcoming = this.sentences.filter(s => 
+      s.start >= curTime - 1.0 && 
+      s.start <= windowEnd && 
+      !this.requestedIds.has(s.id) &&
+      !this.dubbingCache.has(s.id)
+    );
+
+    if (upcoming.length > 0) {
+      const batch = upcoming.slice(0, 5);
+      batch.forEach(s => this.requestedIds.add(s.id));
+      try {
+        chrome.runtime.sendMessage({
+          type: 'request-batch-dubbing',
+          items: batch
+        });
+      } catch(e) {}
+    }
+  }
+
+  checkAndPlay() {
+    if (!this.video || this.sentences.length === 0) return;
+    const curTime = this.video.currentTime;
+
+    for (const s of this.sentences) {
+      if (!this.playedIds.has(s.id) && curTime >= s.start - 0.15 && curTime <= s.start + s.duration + 0.5) {
+        this.playedIds.add(s.id);
+        const dub = this.dubbingCache.get(s.id);
+        
+        if (dub && dub.audio_base64) {
+          try {
+            chrome.runtime.sendMessage({
+              type: 'play-scheduled-dub',
+              audio_base64: dub.audio_base64,
+              duration: s.duration
+            });
+          } catch(e) {}
+        }
+
+        const textZh = dub ? dub.text_zh : '⌛ 配音準備中...';
+        try {
+          showTimedSubtitle(s.text, textZh, s.start, s.duration);
+        } catch(err) {
+          console.error("showTimedSubtitle failed:", err);
+        }
+      }
+    }
+  }
+
+  onBatchData(items) {
+    if (!items || !Array.isArray(items)) return;
+    for (const it of items) {
+      this.dubbingCache.set(it.id, it);
+    }
+  }
+
+  onSeek() {
+    this.playedIds.clear();
+    this.requestedIds.clear();
+  }
+}
+
+const ytDubber = new YouTubeTranscriptDubber();
+
+function showTimedSubtitle(textRaw, textZh, start, duration) {
+  initSubtitleOverlay();
+  subtitleHistory = subtitleHistory.filter(item => item.text_zh !== '語音系統已連線，準備辨識中...');
+  subtitleHistory.push({
+    text_raw: textRaw,
+    text_zh: textZh,
+    start: start,
+    duration: duration
+  });
+  if (subtitleHistory.length > maxHistoryLines + 1) {
+    subtitleHistory = subtitleHistory.slice(subtitleHistory.length - (maxHistoryLines + 1));
+  }
+  renderHistorySubtitles('zh-CN', true);
+  window.__lcSubtitleHistory = subtitleHistory;
+  if (clearTimer) clearTimeout(clearTimer);
+  clearTimer = setTimeout(clearSubtitle, Math.max(3000, (duration || 3) * 1000 + 1200));
+}
+
 function getActiveVideo() {
   const videos = Array.from(document.querySelectorAll('video'));
   if (videos.length === 0) return null;
-  const playing = videos.find(v => !v.paused && v.currentTime > 0);
+  const playing = videos.find(v => !v.paused);
   if (playing) return playing;
-  return videos.sort((a, b) => (b.clientWidth * b.clientHeight) - (a.clientWidth * a.clientHeight))[0];
+  return videos[0];
 }
 
 function attachVideoListeners(video) {
@@ -21,6 +233,7 @@ function attachVideoListeners(video) {
   video.addEventListener('seeking', () => {
     if (isDubbingActive) {
       chrome.runtime.sendMessage({ type: 'video-control', action: 'seek' }).catch(() => {});
+      ytDubber.onSeek();
     }
   });
 }
@@ -295,9 +508,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     
     // 更新配音模式標記 (視頻播放 100% 由用戶掌握，絕不強行暫停視頻)
     isDubbingActive = !!message.dubbingEnabled;
-    if (isDubbingActive) {
-      const vid = getActiveVideo();
-      if (vid) attachVideoListeners(vid);
+    const vid = getActiveVideo();
+    if (vid) attachVideoListeners(vid);
+    if (isDubbingActive && ytDubber.isYouTube()) {
+      ytDubber.loadTranscript().then(ok => {
+        const currentVid = getActiveVideo();
+        if (ok && currentVid) ytDubber.start(currentVid);
+      });
+    } else {
+      ytDubber.stop();
     }
     
     // Push initial status placeholder
@@ -314,6 +533,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   
   if (message.type === 'hide-subtitles') {
     clearSubtitle();
+    ytDubber.stop();
+  }
+
+  if (message.type === 'batch-dubbing-data') {
+    ytDubber.onBatchData(message.items);
   }
   
   if (message.type === 'render-subtitle') {

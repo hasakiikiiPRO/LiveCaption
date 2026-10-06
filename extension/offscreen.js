@@ -24,6 +24,22 @@ chrome.runtime.onMessage.addListener(async (message) => {
     sendConfigToBackend();
   }
 
+  if (message.type === 'request-batch-dubbing') {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({
+        event: 'batch_dubbing_request',
+        items: message.items,
+        target_lang: config.targetLang || 'zh-CN',
+        tts_voice: config.ttsVoice || 'yunxi',
+        preset: config.preset || config.promptPreset || 'general'
+      }));
+    }
+  }
+
+  if (message.type === 'play-scheduled-dub') {
+    playDirectDubbingAudio(message.audio_base64, message.duration);
+  }
+
   if (message.type === 'video-control') {
     if (message.action === 'seek' || message.action === 'stop-stale') {
       dubbingQueue = [];
@@ -154,6 +170,13 @@ function connectWebSocket() {
       if (data.event === 'dubbing_audio') {
         enqueueDubbingAudio(data);
       }
+      if (data.event === 'batch_dubbing_response') {
+        chrome.runtime.sendMessage({
+          target: 'background',
+          type: 'batch-dubbing-data',
+          items: data.items
+        });
+      }
     } catch (e) {
       console.warn("Failed to parse backend message:", e);
     }
@@ -179,6 +202,53 @@ function connectWebSocket() {
   ws.onerror = (err) => {
     console.error("WebSocket error:", err);
   };
+}
+
+async function playDirectDubbingAudio(audioBase64, origDuration) {
+  if (!playbackContext || playbackContext.state === 'closed' || !audioBase64) return;
+  const targetDuckVol = (config.duckingVolume !== undefined) ? Number(config.duckingVolume) : 0.10;
+  
+  try {
+    const binaryStr = atob(audioBase64);
+    const bytes = new Uint8Array(binaryStr.length);
+    for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
+    const audioBuffer = await playbackContext.decodeAudioData(bytes.buffer.slice(0));
+    const dubDuration = audioBuffer.duration;
+    const od = (origDuration && Number(origDuration) > 0) ? Number(origDuration) : dubDuration;
+
+    let speedRatio = 1.0;
+    if (dubDuration > od && od > 0.5) {
+      speedRatio = Math.min(1.25, Math.max(1.0, dubDuration / od));
+    }
+
+    if (duckingGain) {
+      const now = playbackContext.currentTime;
+      duckingGain.gain.cancelScheduledValues(now);
+      duckingGain.gain.setTargetAtTime(Math.max(0.0, Math.min(1.0, targetDuckVol)), now, 0.025);
+    }
+
+    const source = playbackContext.createBufferSource();
+    source.buffer = audioBuffer;
+    source.playbackRate.value = speedRatio;
+    source.connect(playbackContext.destination);
+    currentDubSource = source;
+    isPlayingDub = true;
+
+    source.onended = () => {
+      if (currentDubSource === source) {
+        currentDubSource = null;
+        isPlayingDub = false;
+        if (duckingGain) {
+          const now = playbackContext.currentTime;
+          duckingGain.gain.cancelScheduledValues(now);
+          duckingGain.gain.setTargetAtTime(1.0, now, 0.08);
+        }
+      }
+    };
+    source.start(0);
+  } catch (e) {
+    console.warn("Failed to play scheduled dubbing audio:", e);
+  }
 }
 
 function enqueueDubbingAudio(item) {

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "LiveCaption (AI雙語字幕 + 同傳配音)",
-  "version": "2.2.0",
-  "description": "即時影片語音辨識、雙語字幕與同傳配音 (SenseVoice + Edge-TTS + Audio Ducking + 智能鎖步對齊)",
+  "version": "2.3.0",
+  "description": "即時影片語音辨識、雙語字幕與同傳配音 (SenseVoice + Edge-TTS + Audio Ducking + YouTube 字幕軌精準預配音)",
   "permissions": [
     "tabCapture",
     "offscreen",

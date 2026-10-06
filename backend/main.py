@@ -471,6 +471,52 @@ async def websocket_endpoint(websocket: WebSocket):
                             stream_offset_samples = total_samples_received
                             print(f"已動態更新 VAD 設定: min_silence={min_silence}s, max_speech={max_speech}s")
                         print(f"已更新後端設定: Ollama={ollama_url}, Model={model_name}, SourceLang={source_lang}, TargetLang={target_lang}, Preset={preset}")
+                    
+                    if config_data.get("event") == "batch_dubbing_request":
+                        req_items = config_data.get("items", [])
+                        req_target_lang = config_data.get("target_lang", target_lang)
+                        req_voice = config_data.get("tts_voice", tts_voice)
+                        req_preset = config_data.get("preset", preset)
+                        if req_target_lang == "none":
+                            req_target_lang = "zh-CN"
+                            
+                        async def process_one_item(item):
+                            raw_t = item.get("text", "")
+                            item_id = item.get("id")
+                            item_start = float(item.get("start", 0))
+                            item_dur = float(item.get("duration", 0))
+                            if not raw_t:
+                                return None
+                            try:
+                                tr_t = await translate_text(
+                                    raw_t, req_target_lang, ollama_url, model_name, deepseek_key,
+                                    source_lang=source_lang, context_history=None, preset=req_preset
+                                )
+                                mp3_b = await synthesize_edge_tts(tr_t, voice=req_voice)
+                                return {
+                                    "id": item_id,
+                                    "text_raw": raw_t,
+                                    "text_zh": tr_t,
+                                    "start": item_start,
+                                    "duration": item_dur,
+                                    "audio_base64": base64.b64encode(mp3_b).decode('ascii') if mp3_b else ""
+                                }
+                            except Exception as it_err:
+                                print(f"批次預配音處理失敗 item {item_id}: {it_err}")
+                                return None
+
+                        async def run_batch():
+                            tasks = [process_one_item(it) for it in req_items[:8]]
+                            res_list = await asyncio.gather(*tasks)
+                            valid_res = [r for r in res_list if r and r.get("audio_base64")]
+                            if valid_res:
+                                await websocket.send_json({
+                                    "event": "batch_dubbing_response",
+                                    "items": valid_res
+                                })
+                        
+                        asyncio.create_task(run_batch())
+                        continue
                 except Exception as e:
                     print(f"解析設定訊息或更新 VAD 失敗: {e}")
                 continue
