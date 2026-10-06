@@ -11,6 +11,7 @@ const maxSpeechInput = document.getElementById('max-speech');
 const uiLangInput = document.getElementById('ui-lang');
 const sourceLangInput = document.getElementById('source-lang');
 const targetLangInput = document.getElementById('target-lang');
+const promptPresetInput = document.getElementById('prompt-preset');
 const showBilingualInput = document.getElementById('show-bilingual');
 const bgTransparentInput = document.getElementById('bg-transparent');
 const bgColorInput = document.getElementById('bg-color');
@@ -41,6 +42,11 @@ const i18n = {
     optSourceAuto: '自動偵測 (Auto)',
     labelTargetLang: '字幕翻譯語言',
     optTargetNone: '僅顯示原文',
+    labelPromptPreset: '翻譯語境場景',
+    optPresetGeneral: '通用生活 / 日常對話',
+    optPresetLecture: '學術演講 / 線上課程',
+    optPresetDrama: '影視戲劇 / 情感口語',
+    optPresetNews: '新聞廣播 / 紀實訪談',
     labelShowBilingual: '雙語對照模式 (Bilingual Mode)',
     titleOllama: '本機翻譯設定 (Ollama)',
     noticeOllama: '⚠️ Ollama 需另行安裝，並自行下載 qwen2.5:3b-instruct 模型（約 2GB）。未安裝時系統會自動改用免費的 Google 翻譯，字幕仍可正常運作。',
@@ -89,6 +95,11 @@ const i18n = {
     optSourceAuto: '自动侦测 (Auto)',
     labelTargetLang: '字幕翻译语言',
     optTargetNone: '仅显示原文',
+    labelPromptPreset: '翻译语境场景',
+    optPresetGeneral: '通用生活 / 日常对话',
+    optPresetLecture: '学术演讲 / 在线课程',
+    optPresetDrama: '影视戏剧 / 情感口语',
+    optPresetNews: '新闻广播 / 纪实访谈',
     labelShowBilingual: '双语对照模式 (Bilingual Mode)',
     titleOllama: '本地翻译设置 (Ollama)',
     noticeOllama: '⚠️ Ollama 需另行安装，并自行下载 qwen2.5:3b-instruct 模型（约 2GB）。未安装时系统会自动改用免费的 Google 翻译，字幕仍可正常运作。',
@@ -137,6 +148,11 @@ const i18n = {
     optSourceAuto: 'Auto Detect (Auto)',
     labelTargetLang: 'Subtitle Translation Language',
     optTargetNone: 'Original Only',
+    labelPromptPreset: 'Translation Context / Preset',
+    optPresetGeneral: 'General / Daily Conversation',
+    optPresetLecture: 'Academic / Online Lectures',
+    optPresetDrama: 'Movies & Dramas / Colloquial',
+    optPresetNews: 'News & Interviews / Formal',
     labelShowBilingual: 'Bilingual Mode',
     titleOllama: 'Local Translation (Ollama)',
     noticeOllama: '⚠️ Ollama must be installed separately, along with the qwen2.5:3b-instruct model (~2GB). Without it, the system automatically falls back to free Google Translate and captions still work.',
@@ -185,6 +201,11 @@ const i18n = {
     optSourceAuto: '自動検出 (Auto)',
     labelTargetLang: '字幕翻訳言語',
     optTargetNone: '原文のみ表示',
+    labelPromptPreset: '翻訳シナリオ (プリセット)',
+    optPresetGeneral: '日常会話・一般的な動画',
+    optPresetLecture: '学術講義・オンライン講座',
+    optPresetDrama: '映画・ドラマ・感情表現',
+    optPresetNews: 'ニュース・対談・公式報道',
     labelShowBilingual: '二言語表示モード',
     titleOllama: 'ローカル翻訳設定 (Ollama)',
     noticeOllama: '⚠️ Ollama は別途インストールが必要で、qwen2.5:3b-instruct モデル（約 2GB）もご自身でダウンロードしてください。未導入の場合は自動的に無料の Google 翻訳に切り替わり、字幕は正常に動作します。',
@@ -233,6 +254,11 @@ const i18n = {
     optSourceAuto: '자동 감지 (Auto)',
     labelTargetLang: '자막 번역 언어',
     optTargetNone: '원본만 표시',
+    labelPromptPreset: '번역 상황 프리셋',
+    optPresetGeneral: '일상 대화 / 일반 영상',
+    optPresetLecture: '학술 강의 / 온라인 강좌',
+    optPresetDrama: '영화·드라마 / 구어체',
+    optPresetNews: '뉴스·인터뷰 / 공식 보도',
     labelShowBilingual: '이중 언어 대조 모드',
     titleOllama: '로컬 번역 설정 (Ollama)',
     noticeOllama: '⚠️ Ollama는 별도로 설치해야 하며, qwen2.5:3b-instruct 모델(약 2GB)도 직접 내려받아야 합니다. 설치하지 않으면 무료 Google 번역으로 자동 전환되어 자막은 정상 작동합니다.',
@@ -301,6 +327,13 @@ function applyLanguage(lang) {
   document.getElementById('opt-source-auto').textContent = getTranslation(lang, 'optSourceAuto');
   document.getElementById('label-target-lang').textContent = getTranslation(lang, 'labelTargetLang');
   document.getElementById('opt-target-none').textContent = getTranslation(lang, 'optTargetNone');
+  if (document.getElementById('label-prompt-preset')) {
+    document.getElementById('label-prompt-preset').textContent = getTranslation(lang, 'labelPromptPreset');
+    document.getElementById('opt-preset-general').textContent = getTranslation(lang, 'optPresetGeneral');
+    document.getElementById('opt-preset-lecture').textContent = getTranslation(lang, 'optPresetLecture');
+    document.getElementById('opt-preset-drama').textContent = getTranslation(lang, 'optPresetDrama');
+    document.getElementById('opt-preset-news').textContent = getTranslation(lang, 'optPresetNews');
+  }
   document.getElementById('label-show-bilingual').textContent = getTranslation(lang, 'labelShowBilingual');
   
   document.getElementById('title-ollama').textContent = getTranslation(lang, 'titleOllama');
@@ -346,7 +379,7 @@ function applyLanguage(lang) {
 
 chrome.storage.local.get([
   'ollamaUrl', 'modelName', 'deepseekKey', 'minSilence', 'maxSpeech',
-  'uiLang', 'sourceLang', 'targetLang', 'showBilingual',
+  'uiLang', 'sourceLang', 'targetLang', 'promptPreset', 'showBilingual',
   'bgColor', 'textColor', 'fontSize', 'historyLines', 'bgTransparent'
 ], (result) => {
   if (result.ollamaUrl) ollamaUrlInput.value = result.ollamaUrl;
@@ -365,6 +398,9 @@ chrome.storage.local.get([
   }
   if (result.sourceLang) sourceLangInput.value = result.sourceLang;
   if (result.targetLang) targetLangInput.value = result.targetLang;
+  if (promptPresetInput) {
+    promptPresetInput.value = result.promptPreset || 'general';
+  }
   if (result.showBilingual !== undefined) {
     showBilingualInput.checked = result.showBilingual;
   } else {
@@ -396,6 +432,8 @@ const saveSettings = () => {
     uiLang: uiLangInput.value,
     sourceLang: sourceLangInput.value,
     targetLang: targetLangInput.value,
+    promptPreset: promptPresetInput ? promptPresetInput.value : 'general',
+    preset: promptPresetInput ? promptPresetInput.value : 'general',
     showBilingual: showBilingualInput.checked,
     bgTransparent: true,
     bgColor: bgColorInput ? bgColorInput.value : 'transparent',
@@ -446,6 +484,7 @@ uiLangInput.addEventListener('change', () => {
 });
 sourceLangInput.addEventListener('change', saveSettings);
 targetLangInput.addEventListener('change', saveSettings);
+if (promptPresetInput) promptPresetInput.addEventListener('change', saveSettings);
 showBilingualInput.addEventListener('change', saveSettings);
 
 if (bgColorInput) bgColorInput.addEventListener('input', saveSettings);

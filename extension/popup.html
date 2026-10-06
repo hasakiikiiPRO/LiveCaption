@@ -80,6 +80,16 @@
       </select>
     </div>
 
+    <div class="input-group" style="margin-bottom: 16px;">
+      <label for="prompt-preset" id="label-prompt-preset">翻譯語境場景</label>
+      <select id="prompt-preset" style="cursor: pointer;">
+        <option value="general" id="opt-preset-general" selected>通用生活 / 日常對話</option>
+        <option value="lecture" id="opt-preset-lecture">學術演講 / 線上課程</option>
+        <option value="drama" id="opt-preset-drama">影視戲劇 / 情感口語</option>
+        <option value="news" id="opt-preset-news">新聞廣播 / 紀實訪談</option>
+      </select>
+    </div>
+
     <div class="input-group checkbox-wrapper">
       <input type="checkbox" id="show-bilingual" checked style="width: auto; margin: 0; cursor: pointer;">
       <label for="show-bilingual" id="label-show-bilingual" style="margin: 0; cursor: pointer; font-size: 13px; font-weight: 600;">雙語對照模式 (Bilingual Mode)</label>
@@ -140,12 +150,12 @@
 
     <div class="section-title" id="title-vad">進階語音切分設定 (VAD)</div>
     <div class="input-group">
-      <label for="min-silence">斷句靜音時間: <span id="min-silence-val">0.5</span> 秒</label>
-      <input type="range" id="min-silence" min="0.2" max="1.2" step="0.1" value="0.5" style="width: 100%; margin: 4px 0;">
+      <label for="min-silence">斷句靜音時間: <span id="min-silence-val">0.3</span> 秒</label>
+      <input type="range" id="min-silence" min="0.2" max="1.2" step="0.1" value="0.3" style="width: 100%; margin: 4px 0;">
     </div>
     <div class="input-group">
-      <label for="max-speech">單句最長上限: <span id="max-speech-val">6.0</span> 秒</label>
-      <input type="range" id="max-speech" min="2.0" max="12.0" step="0.5" value="6.0" style="width: 100%; margin: 4px 0;">
+      <label for="max-speech">單句最長上限: <span id="max-speech-val">4.0</span> 秒</label>
+      <input type="range" id="max-speech" min="2.0" max="12.0" step="0.5" value="4.0" style="width: 100%; margin: 4px 0;">
     </div>
     
     <div class="footer">

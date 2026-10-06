@@ -113,6 +113,99 @@ def clean_sense_voice_text(text: str) -> str:
     # 清理多餘空白
     return cleaned.strip()
 
+SAMPLE_RATE = 16000
+
+# VAD 斷句參數：預設值與外掛面板滑桿範圍（popup.html 的 min/max）一致
+VAD_DEFAULT_MIN_SILENCE = 0.3
+VAD_DEFAULT_MAX_SPEECH = 4.0
+VAD_MIN_SILENCE_RANGE = (0.2, 1.2)
+VAD_MAX_SPEECH_RANGE = (2.0, 12.0)
+
+
+def parse_vad_settings(config_data: dict) -> tuple:
+    """取用戶在面板設定的 VAD 參數；缺少或無效時用預設值，超出面板範圍時夹到邊界。"""
+    def pick(key, default, bounds):
+        try:
+            value = float(config_data.get(key))
+        except (TypeError, ValueError):
+            return default
+        if value != value:  # NaN
+            return default
+        return min(max(value, bounds[0]), bounds[1])
+
+    return (
+        pick("min_silence", VAD_DEFAULT_MIN_SILENCE, VAD_MIN_SILENCE_RANGE),
+        pick("max_speech", VAD_DEFAULT_MAX_SPEECH, VAD_MAX_SPEECH_RANGE),
+    )
+
+
+def make_vad(min_silence: float, max_speech: float):
+    config = sherpa_onnx.VadModelConfig(
+        silero_vad=sherpa_onnx.SileroVadModelConfig(
+            model=VAD_MODEL_PATH,
+            threshold=0.4,
+            min_silence_duration=min_silence,
+            min_speech_duration=0.15,
+            max_speech_duration=max_speech,
+        ),
+        sample_rate=SAMPLE_RATE,
+    )
+    return sherpa_onnx.VoiceActivityDetector(config, buffer_size_in_seconds=30)
+
+
+# 翻譯提示詞預設（外掛面板「翻譯場景」選單選擇）。所有預設共用 ASR 糾錯與輸出規則。
+TRANSLATION_PRESETS = {
+    "general": (
+        "你是一个专业的视频字幕实时翻译。",
+        "译文自然、口语化，简洁易懂。",
+    ),
+    "lecture": (
+        "你是一个专业的网课与学术讲座字幕翻译。",
+        "专业术语使用该领域公认的中文译名，常见缩写（如 CT、GPU）保留英文；表达准确、条理清楚。",
+    ),
+    "drama": (
+        "你是一个影视剧字幕翻译。",
+        "贴合人物语气和剧情氛围，口语地道，保留情绪，不要书面化。",
+    ),
+    "news": (
+        "你是一个新闻与访谈字幕翻译。",
+        "用词规范客观，人名、地名、机构名使用通行译名。",
+    ),
+}
+DEFAULT_PRESET = "general"
+
+
+def build_system_prompt(target_name: str, preset: str = None) -> str:
+    role, style = TRANSLATION_PRESETS.get(preset or DEFAULT_PRESET, TRANSLATION_PRESETS[DEFAULT_PRESET])
+    return (
+        f"{role}\n"
+        "【规则】\n"
+        "1. 输入来自实时语音识别（ASR），可能有同音错字、断句不当或漏字。请结合前文语境判断原意后再翻译，不要逐字硬译。\n"
+        f"2. {style}\n"
+        "3. 译文长度尽量和原句相当，适合作为字幕阅读。\n"
+        f"4. 只输出翻译好的{target_name}，不要任何解释、前缀或引号。"
+    )
+
+
+# 中繼翻譯逾時：實測 p99 約 3.1 s；讀取等待最多 6 s，連線建立 2 s 內失敗就降級。
+RELAY_TIMEOUT = httpx.Timeout(6.0, connect=2.0)
+
+
+def load_relay_config():
+    """環境變數優先，其次是 backend/config.local.json（不進 git）。"""
+    local_cfg = {}
+    cfg_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.local.json")
+    if not os.environ.get("LIVECAPTION_NO_LOCAL_CONFIG") and os.path.exists(cfg_file):
+        try:
+            with open(cfg_file, "r", encoding="utf-8") as f:
+                local_cfg = json.load(f)
+        except Exception:
+            pass
+    base = os.environ.get("ANTHROPIC_BASE_URL") or local_cfg.get("relay_base")
+    key = os.environ.get("ANTHROPIC_API_KEY") or local_cfg.get("relay_key")
+    return base, key
+
+
 # 全局變數，用來快取 Ollama 是否在線，避免每次都等待 3 秒超時
 ollama_online = True
 
@@ -141,26 +234,13 @@ def get_http_client():
         )
     return http_client
 
-async def translate_text(text: str, target_lang: str, ollama_url: str, model_name: str, deepseek_key: str = None, source_lang: str = "auto", context_history: list = None) -> str:
+async def translate_text(text: str, target_lang: str, ollama_url: str, model_name: str, deepseek_key: str = None, source_lang: str = "auto", context_history: list = None, preset: str = None) -> str:
     global ollama_online
     """
     四軌翻譯引擎：支援高效能中繼 (Gemini 3.1 Flash-Lite)、線上 DeepSeek API、本機 Ollama、以及免費 Google Translate API。
     """
     target_name = LANG_MAP.get(target_lang, "簡體中文")
-
-    system_prompt = f"""你是一个顶级的影视汉化组字幕翻译专家，擅长日本影视剧、生活对话、恋爱及成人向情境对话翻译。
-【核心规则】
-1. 输入文本由实时语音识别（ASR）生成，常有同音错别字、吞音断句误差或杂音干扰（例如：两手识别为工手、何カップ被拆开、言わせて识别为言かせて、って聞いてない识别为スきいてない）。
-2. 你必须结合前文语境自动纠正错别字并脑补语义，严禁机械字面直译！
-3. 特殊术语与语境理解：
-   - カップ 指罩杯/胸围（如 D罩杯、G罩杯，绝非水杯/中杯）
-   - 聞いてない/聞いてないんですか 指没听说/没提前通知/没交代（绝非没听见/没听）
-   - 言わせる 指叫出声/求饶/呻吟
-   - 工手/両手 指双手
-   - 逝く/イく 指到了/高潮
-   - 奥 指深处/里面
-4. 语言风格要地道、自然、生活化、符合口语与影视剧情氛围。
-5. 只输出最终翻译好的{target_name}，绝不要任何解释、前缀或废话。"""
+    system_prompt = build_system_prompt(target_name, preset)
 
     user_content = text
     if context_history:
@@ -168,21 +248,11 @@ async def translate_text(text: str, target_lang: str, ollama_url: str, model_nam
         if ctx_str:
             user_content = f"【前文语境参考】\n{ctx_str}\n\n【待翻译字幕】\n{text}"
 
-    # 0. 優先使用高速無審查中繼 API (Gemini 3.1 Flash-Lite，延遲超低、理解極佳)
-    local_cfg = {}
-    cfg_file = os.path.join(os.path.dirname(__file__), "config.local.json")
-    if os.path.exists(cfg_file):
-        try:
-            with open(cfg_file, "r", encoding="utf-8") as f:
-                local_cfg = json.load(f)
-        except Exception:
-            pass
-
-    relay_base = os.environ.get("ANTHROPIC_BASE_URL") or local_cfg.get("relay_base")
-    relay_key = os.environ.get("ANTHROPIC_API_KEY") or local_cfg.get("relay_key")
+    # 0. 優先使用中繼 API (Gemini 3.1 Flash-Lite)
+    relay_base, relay_key = load_relay_config()
     if relay_base and relay_key:
         try:
-            async with httpx.AsyncClient(timeout=3.5) as client:
+            async with httpx.AsyncClient(timeout=RELAY_TIMEOUT) as client:
                 r = await client.post(
                     f"{relay_base.rstrip('/')}/v1/messages",
                     headers={
@@ -202,8 +272,10 @@ async def translate_text(text: str, target_lang: str, ollama_url: str, model_nam
                     for c in res_json.get("content", []):
                         if c.get("type") == "text" and c.get("text"):
                             return c.get("text").strip()
+                else:
+                    print(f"中繼翻譯回應 HTTP {r.status_code}，改用備援翻譯")
         except Exception as e:
-            print(f"Gemini 3.1 Flash 翻譯調用失敗: {e}")
+            print(f"中繼翻譯失敗（{type(e).__name__}），改用備援翻譯: {e}")
 
     # 1. 優先嘗試 DeepSeek API (若有提供 API Key)
     if deepseek_key and len(deepseek_key.strip()) > 10:
@@ -260,6 +332,8 @@ async def translate_text(text: str, target_lang: str, ollama_url: str, model_nam
             ollama_online = False
 
     # 3. 終極備用：免費 Google Translate Web API (免 Key、免配置、即開即用，長連接池)
+    if os.environ.get("LIVECAPTION_DISABLE_GOOGLE"):
+        return f"[未翻譯] {text}"
     try:
         client = get_http_client()
         url = "https://translate.googleapis.com/translate_a/single"
@@ -312,17 +386,11 @@ async def websocket_endpoint(websocket: WebSocket):
         transcript_file_path = None
     
     # 建立連線專用的獨立 VAD 實例以避免不同連線互相干擾
-    vad_config = sherpa_onnx.VadModelConfig(
-        silero_vad=sherpa_onnx.SileroVadModelConfig(
-            model=VAD_MODEL_PATH,
-            threshold=0.4,
-            min_silence_duration=0.5,
-            min_speech_duration=0.15,
-            max_speech_duration=10.0,
-        ),
-        sample_rate=16000,
-    )
-    local_vad = sherpa_onnx.VoiceActivityDetector(vad_config, buffer_size_in_seconds=30)
+    min_silence = VAD_DEFAULT_MIN_SILENCE
+    max_speech = VAD_DEFAULT_MAX_SPEECH
+    local_vad = make_vad(min_silence, max_speech)
+    total_samples_received = 0
+    stream_offset_samples = 0
     
     # 設定選項 (預設為 Ollama 本地)
     ollama_url = "http://localhost:11434"
@@ -330,6 +398,7 @@ async def websocket_endpoint(websocket: WebSocket):
     deepseek_key = None
     source_lang = "auto"
     target_lang = "none"
+    preset = DEFAULT_PRESET
     dialogue_history = []  # 保存最近的對話歷史 (原文, 翻譯)，提供大模型語境推斷
 
     try:
@@ -347,27 +416,20 @@ async def websocket_endpoint(websocket: WebSocket):
                         deepseek_key = config_data.get("deepseek_key", deepseek_key)
                         source_lang = config_data.get("source_lang", source_lang)
                         target_lang = config_data.get("target_lang", target_lang)
+                        preset = config_data.get("preset", preset)
                         global ollama_online
                         if ollama_url and ("localhost" in ollama_url or "127.0.0.1" in ollama_url):
                             ollama_online = False
                         
-                        # 動態重新設定 VAD 參數：預設靜音切分壓低到 0.3s，單句上限 4s，顯著提升出字響應速度
-                        min_silence = min(float(config_data.get("min_silence", 0.3)), 0.3)
-                        max_speech = min(float(config_data.get("max_speech", 4.0)), 4.0)
-                        
-                        vad_config = sherpa_onnx.VadModelConfig(
-                            silero_vad=sherpa_onnx.SileroVadModelConfig(
-                                model=VAD_MODEL_PATH,
-                                threshold=0.4,
-                                min_silence_duration=min_silence,
-                                min_speech_duration=0.15,
-                                max_speech_duration=max_speech,
-                            ),
-                            sample_rate=16000,
-                        )
-                        local_vad = sherpa_onnx.VoiceActivityDetector(vad_config, buffer_size_in_seconds=30)
-                        print(f"已更新後端設定: Ollama={ollama_url}, Model={model_name}, SourceLang={source_lang}, TargetLang={target_lang}")
-                        print(f"已動態更新 VAD 設定: min_silence={min_silence}s, max_speech={max_speech}s")
+                        # 解析面板設定的 VAD 參數，若有變更則重新建立 VAD
+                        new_min_silence, new_max_speech = parse_vad_settings(config_data)
+                        if (new_min_silence != min_silence) or (new_max_speech != max_speech):
+                            min_silence = new_min_silence
+                            max_speech = new_max_speech
+                            local_vad = make_vad(min_silence, max_speech)
+                            stream_offset_samples = total_samples_received
+                            print(f"已動態更新 VAD 設定: min_silence={min_silence}s, max_speech={max_speech}s")
+                        print(f"已更新後端設定: Ollama={ollama_url}, Model={model_name}, SourceLang={source_lang}, TargetLang={target_lang}, Preset={preset}")
                 except Exception as e:
                     print(f"解析設定訊息或更新 VAD 失敗: {e}")
                 continue
@@ -381,6 +443,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 # 轉成 16kHz float32 NumPy 陣列
                 # 前端會以 16-bit signed PCM (Int16) 發送
                 pcm_data = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+                total_samples_received += len(pcm_data)
                 
                 # 餵給 VAD
                 local_vad.accept_waveform(pcm_data)
@@ -389,7 +452,8 @@ async def websocket_endpoint(websocket: WebSocket):
                 while not local_vad.empty():
                     speech_segment = local_vad.front
                     samples = speech_segment.samples
-                    start_time = speech_segment.start
+                    start_time = (stream_offset_samples + speech_segment.start) / float(SAMPLE_RATE)
+                    duration = len(samples) / float(SAMPLE_RATE)
                     
                     # 丟給 SenseVoice 解碼
                     if len(samples) > 0 and asr_recognizer is not None:
@@ -431,7 +495,6 @@ async def websocket_endpoint(websocket: WebSocket):
                                     raw_text = translated_text  # 同步為簡體
                                 print(f"ASR 識別 [{start_time:.2f}s] (中文本地 CC 轉換): {translated_text}")
                             else:
-                                duration = len(samples) / 16000.0
                                 print(f"ASR 識別 [{start_time:.2f}s] (目標語言 '{target_lang}'): {raw_text}")
                                 # 1. 立即上屏原文（0 延遲，50ms 內上屏）
                                 await websocket.send_json({
@@ -444,10 +507,11 @@ async def websocket_endpoint(websocket: WebSocket):
                                 
                                 # 2. 非阻塞背景非同步翻譯，絕不卡頓音訊接收管道
                                 ctx_snapshot = [f"{h[0]} ({h[1]})" for h in dialogue_history[-2:]]
+                                cur_preset = preset
                                 
-                                async def async_translate_and_update(cur_text, cur_start, cur_duration, cur_src_lang, f_path, cur_ctx):
+                                async def async_translate_and_update(cur_text, cur_start, cur_duration, cur_src_lang, f_path, cur_ctx, cur_pr):
                                     translated_str = await translate_text(
-                                        cur_text, target_lang, ollama_url, model_name, deepseek_key, source_lang=cur_src_lang, context_history=cur_ctx
+                                        cur_text, target_lang, ollama_url, model_name, deepseek_key, source_lang=cur_src_lang, context_history=cur_ctx, preset=cur_pr
                                     )
                                     print(f"翻譯結果: {translated_str}")
                                     dialogue_history.append((cur_text, translated_str))
@@ -477,7 +541,7 @@ async def websocket_endpoint(websocket: WebSocket):
                                             print(f"寫入紀錄檔失敗: {file_err}")
                                 
                                 asyncio.create_task(
-                                    async_translate_and_update(raw_text, start_time, duration, recognized_lang, transcript_file_path, ctx_snapshot)
+                                    async_translate_and_update(raw_text, start_time, duration, recognized_lang, transcript_file_path, ctx_snapshot, cur_preset)
                                 )
                             
                             if target_lang in ["none", recognized_lang] or (recognized_lang == "zh" and target_lang in ["zh-TW", "zh-CN"]):
@@ -487,7 +551,7 @@ async def websocket_endpoint(websocket: WebSocket):
                                     "text_raw": raw_text,
                                     "text_zh": translated_text,
                                     "start": start_time,
-                                    "duration": len(samples) / 16000.0
+                                    "duration": duration
                                 })
                                 if transcript_file_path:
                                     try:

@@ -19,6 +19,7 @@ backend/silero_vad.onnx
 # 會議/影片逐字稿紀錄與測試暫存檔
 transcripts/
 backend/dummy_test.wav
+backend/tests/fixtures/
 
 # Local OS files
 .DS_Store
