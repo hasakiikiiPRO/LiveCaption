@@ -119,7 +119,11 @@ async function startCapture(streamId, tabId) {
     await chrome.storage.local.set({ isCapturing: true, activeTabId: tabId });
     
     // 3. Load config from storage
-    const storage = await chrome.storage.local.get(['ollamaUrl', 'modelName', 'deepseekKey', 'minSilence', 'maxSpeech', 'showBilingual', 'sourceLang', 'targetLang', 'promptPreset']);
+    const storage = await chrome.storage.local.get([
+      'ollamaUrl', 'modelName', 'deepseekKey', 'minSilence', 'maxSpeech',
+      'showBilingual', 'sourceLang', 'targetLang', 'promptPreset',
+      'dubbingEnabled', 'ttsVoice', 'duckingVolume'
+    ]);
     const config = {
       ollamaUrl: storage.ollamaUrl || 'http://localhost:11434',
       modelName: storage.modelName || 'qwen2.5:3b-instruct',
@@ -129,7 +133,10 @@ async function startCapture(streamId, tabId) {
       sourceLang: storage.sourceLang || 'auto',
       targetLang: storage.targetLang || 'none',
       promptPreset: storage.promptPreset || 'general',
-      preset: storage.promptPreset || 'general'
+      preset: storage.promptPreset || 'general',
+      dubbingEnabled: !!storage.dubbingEnabled,
+      ttsVoice: storage.ttsVoice || 'yunxi',
+      duckingVolume: storage.duckingVolume !== undefined ? storage.duckingVolume : 0.10
     };
     const showBilingual = storage.showBilingual !== false;
     

@@ -1,6 +1,10 @@
 let mediaStream = null;
 let audioContext = null;
 let playbackContext = null;
+let duckingGain = null;
+let dubbingQueue = [];
+let isPlayingDub = false;
+let currentDubSource = null;
 let processor = null;
 let ws = null;
 let config = {};
@@ -55,10 +59,13 @@ async function startRecording(streamId) {
       }
     }
     
-    // 2. Play original audio stream back to user so they hear it
+    // 2. Play original audio stream back to user so they hear it (with Audio Ducking)
     playbackContext = new AudioContext();
     const playbackSource = playbackContext.createMediaStreamSource(mediaStream);
-    playbackSource.connect(playbackContext.destination);
+    duckingGain = playbackContext.createGain();
+    duckingGain.gain.setValueAtTime(1.0, playbackContext.currentTime);
+    playbackSource.connect(duckingGain);
+    duckingGain.connect(playbackContext.destination);
     
     // 3. Connect to WebSocket backend
     connectWebSocket();
@@ -128,6 +135,9 @@ function connectWebSocket() {
           data: data
         });
       }
+      if (data.event === 'dubbing_audio') {
+        enqueueDubbingAudio(data);
+      }
     } catch (e) {
       console.warn("Failed to parse backend message:", e);
     }
@@ -155,6 +165,74 @@ function connectWebSocket() {
   };
 }
 
+function enqueueDubbingAudio(item) {
+  if (!config.dubbingEnabled && !config.dubbing_enabled) {
+    return;
+  }
+  // 隊列積壓保護：若堆積超過 2 句，丟棄過早的陳舊音訊，防止時延惡性膨脹
+  if (dubbingQueue.length >= 2) {
+    console.warn("Dubbing queue backlog exceeded, dropping stale items to catch up.");
+    dubbingQueue.splice(0, dubbingQueue.length - 1);
+  }
+  dubbingQueue.push(item);
+  if (!isPlayingDub) {
+    playNextDubbing();
+  }
+}
+
+async function playNextDubbing() {
+  if (!playbackContext || playbackContext.state === 'closed') return;
+  
+  const targetDuckVol = (config.duckingVolume !== undefined) ? Number(config.duckingVolume) : 0.10;
+  
+  if (dubbingQueue.length === 0) {
+    isPlayingDub = false;
+    currentDubSource = null;
+    // 250ms 平滑漸變回 1.0 原聲音量
+    if (duckingGain) {
+      const now = playbackContext.currentTime;
+      duckingGain.gain.cancelScheduledValues(now);
+      duckingGain.gain.setTargetAtTime(1.0, now, 0.08);
+    }
+    return;
+  }
+  
+  const item = dubbingQueue.shift();
+  try {
+    const binaryStr = atob(item.audio_base64);
+    const bytes = new Uint8Array(binaryStr.length);
+    for (let i = 0; i < binaryStr.length; i++) {
+      bytes[i] = binaryStr.charCodeAt(i);
+    }
+    
+    const audioBuffer = await playbackContext.decodeAudioData(bytes.buffer.slice(0));
+    
+    // 平滑壓低原聲音量 (80ms 快速淡出到 duckingVolume)
+    if (duckingGain) {
+      const now = playbackContext.currentTime;
+      duckingGain.gain.cancelScheduledValues(now);
+      duckingGain.gain.setTargetAtTime(Math.max(0.0, Math.min(1.0, targetDuckVol)), now, 0.025);
+    }
+    
+    const source = playbackContext.createBufferSource();
+    source.buffer = audioBuffer;
+    source.connect(playbackContext.destination);
+    currentDubSource = source;
+    isPlayingDub = true;
+    
+    source.onended = () => {
+      if (currentDubSource === source) {
+        currentDubSource = null;
+      }
+      playNextDubbing();
+    };
+    source.start(0);
+  } catch (err) {
+    console.warn("Failed to decode or play dubbing audio:", err);
+    playNextDubbing();
+  }
+}
+
 function sendConfigToBackend() {
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({
@@ -166,7 +244,9 @@ function sendConfigToBackend() {
       max_speech: config.maxSpeech,
       source_lang: config.sourceLang,
       target_lang: config.targetLang,
-      preset: config.preset || config.promptPreset || 'general'
+      preset: config.preset || config.promptPreset || 'general',
+      dubbing_enabled: !!(config.dubbingEnabled || config.dubbing_enabled),
+      tts_voice: config.ttsVoice || 'yunxi'
     }));
   }
 }
@@ -179,6 +259,16 @@ window.addEventListener('unload', () => {
 function cleanup() {
   console.log("Cleaning up offscreen contexts...");
   
+  dubbingQueue = [];
+  isPlayingDub = false;
+  if (currentDubSource) {
+    try {
+      currentDubSource.stop();
+    } catch (e) {}
+    currentDubSource = null;
+  }
+  duckingGain = null;
+
   if (reconnectTimer) {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;

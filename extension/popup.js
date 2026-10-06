@@ -19,6 +19,11 @@ const bgColorContainer = document.getElementById('bg-color-container');
 const textColorInput = document.getElementById('text-color');
 const fontSizeInput = document.getElementById('font-size');
 const historyLinesInput = document.getElementById('history-lines');
+const dubbingEnabledInput = document.getElementById('dubbing-enabled');
+const dubbingSettingsPanel = document.getElementById('dubbing-settings-panel');
+const ttsVoiceInput = document.getElementById('tts-voice');
+const duckingVolumeInput = document.getElementById('ducking-volume');
+const duckingVolumeVal = document.getElementById('ducking-volume-val');
 
 let isCapturing = false;
 
@@ -70,6 +75,15 @@ const i18n = {
     optHistory0: '僅顯示最新單行 (0 行歷史)',
     optHistory1: '顯示最新 + 前 1 句 (1 行歷史)',
     optHistory2: '顯示最新 + 前 2 句 (2 行歷史)',
+    titleDubbing: 'AI 同傳配音 (Audio Dubbing)',
+    labelDubbingEnabled: '啟用即時同傳配音 (聽取代讀)',
+    labelTtsVoice: '配音音色',
+    optVoiceYunxi: '雲希 (男聲 • 自然解說·紀錄片)',
+    optVoiceXiaoxiao: '曉曉 (女聲 • 溫柔知性·清晰)',
+    optVoiceYunjian: '雲健 (男聲 • 激情解說·影視)',
+    optVoiceYunyang: '雲揚 (男聲 • 專業播報·新聞)',
+    labelDuckingVolume: '背景原聲音量 (Ducking):',
+    noticeDubbing: '配音播放時自動壓低原聲音量保留背景音；實時聽寫模式下配音約比原聲晚 3-5 秒。',
     titleVad: '進階語音切分設定 (VAD)',
     labelMinSilence: '斷句靜音時間:',
     labelMaxSpeech: '單句最長上限:',
@@ -123,6 +137,15 @@ const i18n = {
     optHistory0: '仅显示最新单行 (0 行历史)',
     optHistory1: '显示最新 + 前 1 句 (1 行历史)',
     optHistory2: '显示最新 + 前 2 句 (2 行历史)',
+    titleDubbing: 'AI 同传配音 (Audio Dubbing)',
+    labelDubbingEnabled: '启用实时同传配音 (听取代读)',
+    labelTtsVoice: '配音音色',
+    optVoiceYunxi: '云希 (男声 • 自然解说·纪录片)',
+    optVoiceXiaoxiao: '晓晓 (女声 • 温柔知性·清晰)',
+    optVoiceYunjian: '云健 (男声 • 激情解说·影视)',
+    optVoiceYunyang: '云扬 (男声 • 专业播报·新闻)',
+    labelDuckingVolume: '背景原声音量 (Ducking):',
+    noticeDubbing: '配音播放时自动压低原声音量保留背景音；实时听写模式下配音约比原声晚 3-5 秒。',
     titleVad: '高级语音切分设置 (VAD)',
     labelMinSilence: '断句静音时间:',
     labelMaxSpeech: '单句最长上限:',
@@ -176,6 +199,15 @@ const i18n = {
     optHistory0: 'Show latest only (0 history lines)',
     optHistory1: 'Show latest + 1 line (1 history line)',
     optHistory2: 'Show latest + 2 lines (2 history lines)',
+    titleDubbing: 'AI Audio Dubbing',
+    labelDubbingEnabled: 'Enable Real-time AI Dubbing',
+    labelTtsVoice: 'Dubbing Voice',
+    optVoiceYunxi: 'Yunxi (Male • Documentary / Natural)',
+    optVoiceXiaoxiao: 'Xiaoxiao (Female • Warm & Clear)',
+    optVoiceYunjian: 'Yunjian (Male • Passionate)',
+    optVoiceYunyang: 'Yunyang (Male • News Anchor)',
+    labelDuckingVolume: 'Background Audio Volume (Ducking):',
+    noticeDubbing: 'Automatically lowers background audio during speech. Live ASR mode has ~3-5s natural delay.',
     titleVad: 'Advanced Speech Segmentation (VAD)',
     labelMinSilence: 'Silence Threshold:',
     labelMaxSpeech: 'Max Speech Duration:',
@@ -229,6 +261,15 @@ const i18n = {
     optHistory0: '最新の1行のみ (履歴なし)',
     optHistory1: '最新 + 前の1行 (履歴1行)',
     optHistory2: '最新 + 前의2行 (履歴2行)',
+    titleDubbing: 'AIリアルタイム吹き替え (Dubbing)',
+    labelDubbingEnabled: 'AI同時吹き替えを有効にする',
+    labelTtsVoice: '吹き替え音声',
+    optVoiceYunxi: 'Yunxi (男性 • 解説・ドキュメンタリー)',
+    optVoiceXiaoxiao: 'Xiaoxiao (女性 • 穏やか・クリア)',
+    optVoiceYunjian: 'Yunjian (男性 • 情熱的)',
+    optVoiceYunyang: 'Yunyang (男性 • ニュース)',
+    labelDuckingVolume: '背景音量 (Ducking):',
+    noticeDubbing: '吹き替え再生時に元音声を自動で抑えます。リアルタイム書き起こしでは3〜5秒の遅延が生じます。',
     titleVad: '高度な音声セグメンテーション (VAD)',
     labelMinSilence: '無音判定時間:',
     labelMaxSpeech: '単句最大時間:',
@@ -282,6 +323,15 @@ const i18n = {
     optHistory0: '최신 한 줄만 표시 (0개 기록)',
     optHistory1: '최신 + 이전 1줄 표시 (1개 기록)',
     optHistory2: '최신 + 이전 2줄 표시 (2개 기록)',
+    titleDubbing: 'AI 실시간 더빙 (Audio Dubbing)',
+    labelDubbingEnabled: '실시간 AI 더빙 활성화',
+    labelTtsVoice: '더빙 목소리',
+    optVoiceYunxi: 'Yunxi (남성 • 다큐멘터리/자연스러운 해설)',
+    optVoiceXiaoxiao: 'Xiaoxiao (여성 • 다정하고 명확한 음성)',
+    optVoiceYunjian: 'Yunjian (남성 • 열정적인 해설)',
+    optVoiceYunyang: 'Yunyang (남성 • 뉴스 앵커)',
+    labelDuckingVolume: '배경 원음 볼륨 (Ducking):',
+    noticeDubbing: '더빙 재생 시 원음 볼륨을 자동으로 낮춥니다. 실시간 받아쓰기 모드에서는 3-5초의 지연이 발생합니다.',
     titleVad: '고급 음성 분할 설정 (VAD)',
     labelMinSilence: '음절 무음 시간:',
     labelMaxSpeech: '한 줄 최대 시간:',
@@ -371,6 +421,17 @@ function applyLanguage(lang) {
   historyOptions[1].textContent = getTranslation(lang, 'optHistory1');
   historyOptions[2].textContent = getTranslation(lang, 'optHistory2');
   
+  if (document.getElementById('title-dubbing')) {
+    document.getElementById('title-dubbing').textContent = getTranslation(lang, 'titleDubbing');
+    document.getElementById('label-dubbing-enabled').textContent = getTranslation(lang, 'labelDubbingEnabled');
+    document.getElementById('label-tts-voice').textContent = getTranslation(lang, 'labelTtsVoice');
+    document.getElementById('opt-voice-yunxi').textContent = getTranslation(lang, 'optVoiceYunxi');
+    document.getElementById('opt-voice-xiaoxiao').textContent = getTranslation(lang, 'optVoiceXiaoxiao');
+    document.getElementById('opt-voice-yunjian').textContent = getTranslation(lang, 'optVoiceYunjian');
+    document.getElementById('opt-voice-yunyang').textContent = getTranslation(lang, 'optVoiceYunyang');
+    document.getElementById('notice-dubbing').textContent = getTranslation(lang, 'noticeDubbing');
+  }
+
   document.getElementById('title-vad').textContent = getTranslation(lang, 'titleVad');
   updateVadLabels(lang);
   
@@ -380,7 +441,8 @@ function applyLanguage(lang) {
 chrome.storage.local.get([
   'ollamaUrl', 'modelName', 'deepseekKey', 'minSilence', 'maxSpeech',
   'uiLang', 'sourceLang', 'targetLang', 'promptPreset', 'showBilingual',
-  'bgColor', 'textColor', 'fontSize', 'historyLines', 'bgTransparent'
+  'bgColor', 'textColor', 'fontSize', 'historyLines', 'bgTransparent',
+  'dubbingEnabled', 'ttsVoice', 'duckingVolume'
 ], (result) => {
   if (result.ollamaUrl) ollamaUrlInput.value = result.ollamaUrl;
   if (result.modelName) modelNameInput.value = result.modelName;
@@ -417,6 +479,20 @@ chrome.storage.local.get([
   if (result.fontSize) fontSizeInput.value = result.fontSize;
   if (result.historyLines !== undefined) historyLinesInput.value = result.historyLines;
 
+  if (dubbingEnabledInput) {
+    dubbingEnabledInput.checked = !!result.dubbingEnabled;
+    dubbingSettingsPanel.style.display = dubbingEnabledInput.checked ? 'block' : 'none';
+  }
+  if (ttsVoiceInput && result.ttsVoice) {
+    ttsVoiceInput.value = result.ttsVoice;
+  }
+  if (duckingVolumeInput && result.duckingVolume !== undefined) {
+    duckingVolumeInput.value = result.duckingVolume;
+    if (duckingVolumeVal) {
+      duckingVolumeVal.textContent = Math.round(Number(result.duckingVolume) * 100) + '%';
+    }
+  }
+
   // Apply localization initially
   applyLanguage(uiLangInput.value);
   updateStatus();
@@ -434,6 +510,9 @@ const saveSettings = () => {
     targetLang: targetLangInput.value,
     promptPreset: promptPresetInput ? promptPresetInput.value : 'general',
     preset: promptPresetInput ? promptPresetInput.value : 'general',
+    dubbingEnabled: dubbingEnabledInput ? dubbingEnabledInput.checked : false,
+    ttsVoice: ttsVoiceInput ? ttsVoiceInput.value : 'yunxi',
+    duckingVolume: duckingVolumeInput ? parseFloat(duckingVolumeInput.value) : 0.10,
     showBilingual: showBilingualInput.checked,
     bgTransparent: true,
     bgColor: bgColorInput ? bgColorInput.value : 'transparent',
@@ -493,6 +572,24 @@ fontSizeInput.addEventListener('change', saveSettings);
 historyLinesInput.addEventListener('change', saveSettings);
 if (bgTransparentInput) {
   bgTransparentInput.addEventListener('change', () => {
+    saveSettings();
+  });
+}
+
+if (dubbingEnabledInput) {
+  dubbingEnabledInput.addEventListener('change', () => {
+    dubbingSettingsPanel.style.display = dubbingEnabledInput.checked ? 'block' : 'none';
+    saveSettings();
+  });
+}
+if (ttsVoiceInput) {
+  ttsVoiceInput.addEventListener('change', saveSettings);
+}
+if (duckingVolumeInput) {
+  duckingVolumeInput.addEventListener('input', () => {
+    if (duckingVolumeVal) {
+      duckingVolumeVal.textContent = Math.round(Number(duckingVolumeInput.value) * 100) + '%';
+    }
     saveSettings();
   });
 }

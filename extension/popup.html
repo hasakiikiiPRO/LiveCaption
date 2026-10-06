@@ -148,6 +148,32 @@
       </select>
     </div>
 
+    <div class="section-title" id="title-dubbing">AI 同傳配音 (Audio Dubbing)</div>
+    <div class="input-group checkbox-wrapper" style="margin-bottom: 12px;">
+      <input type="checkbox" id="dubbing-enabled" style="width: auto; margin: 0; cursor: pointer;">
+      <label for="dubbing-enabled" id="label-dubbing-enabled" style="font-weight: 600; cursor: pointer;">啟用即時同傳配音 (聽取代讀)</label>
+    </div>
+
+    <div id="dubbing-settings-panel" style="display: none;">
+      <div class="input-group" style="margin-bottom: 12px;">
+        <label for="tts-voice" id="label-tts-voice">配音音色</label>
+        <select id="tts-voice" style="cursor: pointer;">
+          <option value="yunxi" id="opt-voice-yunxi" selected>雲希 (男聲 • 自然解說·紀錄片)</option>
+          <option value="xiaoxiao" id="opt-voice-xiaoxiao">曉曉 (女聲 • 溫柔知性·清晰)</option>
+          <option value="yunjian" id="opt-voice-yunjian">雲健 (男聲 • 激情解說·影視)</option>
+          <option value="yunyang" id="opt-voice-yunyang">雲揚 (男聲 • 專業播報·新聞)</option>
+        </select>
+      </div>
+
+      <div class="input-group" style="margin-bottom: 12px;">
+        <label for="ducking-volume">背景原聲音量 (Ducking): <span id="ducking-volume-val">10%</span></label>
+        <input type="range" id="ducking-volume" min="0" max="0.5" step="0.05" value="0.10" style="width: 100%; margin: 4px 0;">
+      </div>
+      <p class="setting-notice setting-notice-info" style="margin-top: 4px;">
+        <span id="notice-dubbing">配音播放時自動壓低原聲音量保留背景音；實時聽寫模式下配音約比原聲晚 3-5 秒。</span>
+      </p>
+    </div>
+
     <div class="section-title" id="title-vad">進階語音切分設定 (VAD)</div>
     <div class="input-group">
       <label for="min-silence">斷句靜音時間: <span id="min-silence-val">0.3</span> 秒</label>

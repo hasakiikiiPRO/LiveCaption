@@ -1,9 +1,11 @@
 import os
 import re
 import json
+import base64
 import asyncio
 import numpy as np
 import httpx
+import edge_tts
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 import sherpa_onnx
@@ -189,6 +191,48 @@ def build_system_prompt(target_name: str, preset: str = None) -> str:
 
 # 中繼翻譯逾時：實測 p99 約 3.1 s；讀取等待最多 6 s，連線建立 2 s 內失敗就降級。
 RELAY_TIMEOUT = httpx.Timeout(6.0, connect=2.0)
+
+# Edge-TTS 音色映射
+TTS_VOICE_MAP = {
+    "yunxi": "zh-CN-YunxiNeural",
+    "xiaoxiao": "zh-CN-XiaoxiaoNeural",
+    "yunjian": "zh-CN-YunjianNeural",
+    "yunyang": "zh-CN-YunyangNeural",
+}
+DEFAULT_TTS_VOICE = "zh-CN-YunxiNeural"
+
+async def synthesize_edge_tts(text: str, voice: str = None, rate: str = "+0%") -> bytes:
+    """使用 Edge-TTS 合成 MP3 音訊字節，優先使用代理，超時限制約 3.5s。"""
+    if not text or not text.strip():
+        return b""
+    clean_text = text.strip()
+    target_voice = TTS_VOICE_MAP.get(voice, voice or DEFAULT_TTS_VOICE)
+    proxy_url = os.environ.get("HTTP_PROXY") or "http://127.0.0.1:7897"
+
+    # 先嘗試走代理
+    try:
+        comm = edge_tts.Communicate(clean_text, target_voice, rate=rate, proxy=proxy_url, connect_timeout=3, receive_timeout=6)
+        buf = bytearray()
+        async with asyncio.timeout(4.0):
+            async for chunk in comm.stream():
+                if chunk["type"] == "audio":
+                    buf.extend(chunk["data"])
+        if buf:
+            return bytes(buf)
+    except Exception as e:
+        # 代理失敗則嘗試直連一次
+        try:
+            comm = edge_tts.Communicate(clean_text, target_voice, rate=rate, proxy=None, connect_timeout=3, receive_timeout=6)
+            buf = bytearray()
+            async with asyncio.timeout(4.0):
+                async for chunk in comm.stream():
+                    if chunk["type"] == "audio":
+                        buf.extend(chunk["data"])
+            if buf:
+                return bytes(buf)
+        except Exception as e2:
+            print(f"Edge-TTS 合成失敗（{type(e2).__name__}）: {e2}")
+    return b""
 
 
 def load_relay_config():
@@ -399,6 +443,8 @@ async def websocket_endpoint(websocket: WebSocket):
     source_lang = "auto"
     target_lang = "none"
     preset = DEFAULT_PRESET
+    dubbing_enabled = False
+    tts_voice = DEFAULT_TTS_VOICE
     dialogue_history = []  # 保存最近的對話歷史 (原文, 翻譯)，提供大模型語境推斷
 
     try:
@@ -417,6 +463,8 @@ async def websocket_endpoint(websocket: WebSocket):
                         source_lang = config_data.get("source_lang", source_lang)
                         target_lang = config_data.get("target_lang", target_lang)
                         preset = config_data.get("preset", preset)
+                        dubbing_enabled = bool(config_data.get("dubbing_enabled", dubbing_enabled))
+                        tts_voice = config_data.get("tts_voice", tts_voice)
                         global ollama_online
                         if ollama_url and ("localhost" in ollama_url or "127.0.0.1" in ollama_url):
                             ollama_online = False
@@ -539,6 +587,21 @@ async def websocket_endpoint(websocket: WebSocket):
                                                 f.write(f"*   **中文**：{translated_str}\n\n")
                                         except Exception as file_err:
                                             print(f"寫入紀錄檔失敗: {file_err}")
+                                    
+                                    # 3. 若啟用同傳配音，非同步合成並推送音訊
+                                    if dubbing_enabled and translated_str and not translated_str.startswith("[未翻譯]"):
+                                        try:
+                                            dub_bytes = await synthesize_edge_tts(translated_str, voice=tts_voice)
+                                            if dub_bytes:
+                                                await websocket.send_json({
+                                                    "event": "dubbing_audio",
+                                                    "text": translated_str,
+                                                    "start": cur_start,
+                                                    "duration": cur_duration,
+                                                    "audio_base64": base64.b64encode(dub_bytes).decode('ascii')
+                                                })
+                                        except Exception as dub_err:
+                                            print(f"生成同傳配音失敗: {dub_err}")
                                 
                                 asyncio.create_task(
                                     async_translate_and_update(raw_text, start_time, duration, recognized_lang, transcript_file_path, ctx_snapshot, cur_preset)
@@ -565,6 +628,25 @@ async def websocket_endpoint(websocket: WebSocket):
                                             f.write(f"*   **中文**：{translated_text}\n\n")
                                     except Exception as file_err:
                                         print(f"寫入紀錄檔失敗: {file_err}")
+
+                                if dubbing_enabled and translated_text and not translated_text.startswith("[未翻譯]"):
+                                    cur_s = start_time
+                                    cur_d = duration
+                                    cur_txt = translated_text
+                                    async def async_direct_tts(text_val, s_val, d_val, v_val):
+                                        try:
+                                            d_bytes = await synthesize_edge_tts(text_val, voice=v_val)
+                                            if d_bytes:
+                                                await websocket.send_json({
+                                                    "event": "dubbing_audio",
+                                                    "text": text_val,
+                                                    "start": s_val,
+                                                    "duration": d_val,
+                                                    "audio_base64": base64.b64encode(d_bytes).decode('ascii')
+                                                })
+                                        except Exception as d_err:
+                                            print(f"生成同傳配音失敗: {d_err}")
+                                    asyncio.create_task(async_direct_tts(cur_txt, cur_s, cur_d, tts_voice))
                     local_vad.pop()
 
     except WebSocketDisconnect:
