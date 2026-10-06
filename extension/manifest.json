@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Studio0808 LiveCaption",
-  "version": "1.0.0",
-  "description": "即時影片語音翻譯雙語字幕外掛 (100% 本機與隱私)",
+  "name": "LiveCaption (AI雙語字幕 + 同傳配音)",
+  "version": "2.1.0",
+  "description": "即時影片語音辨識、雙語字幕與同傳配音 (SenseVoice + Edge-TTS + Audio Ducking)",
   "permissions": [
     "tabCapture",
     "offscreen",
