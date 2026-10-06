@@ -43,8 +43,9 @@
     </div>
 
     <div class="section-title" id="title-control-panel">控制面板</div>
-    <div class="control-group" style="margin-bottom: 12px;">
+    <div class="control-group" style="margin-bottom: 12px; display: flex; flex-direction: column; gap: 8px;">
       <button id="toggle-btn" class="btn btn-start">啟動即時字幕</button>
+      <button id="reload-btn" class="btn" style="background: #334155; color: #f8fafc; font-size: 13px; padding: 8px; font-weight: 600;">🔄 重載外掛 (生效純透明底框)</button>
     </div>
 
     <div class="input-group" style="margin-bottom: 16px;">
@@ -109,15 +110,13 @@
       <input type="password" id="deepseek-key" placeholder="sk-...">
     </div>
     <div class="section-title" id="title-appearance">字幕外觀設定</div>
-    <div class="input-group" style="display: flex; gap: 12px; margin-bottom: 12px;">
-      <div style="flex: 1;">
-        <label for="bg-color">底框顏色</label>
-        <input type="color" id="bg-color" value="#0a0f19">
-      </div>
-      <div style="flex: 1;">
-        <label for="text-color">文字顏色</label>
-        <input type="color" id="text-color" value="#ffffff">
-      </div>
+    <div class="input-group checkbox-wrapper" style="margin-bottom: 12px; display: none;">
+      <input type="checkbox" id="bg-transparent" checked style="width: auto; margin: 0; cursor: pointer;">
+      <label for="bg-transparent" id="label-bg-transparent">全透明底框 (電影字幕風格)</label>
+    </div>
+    <div class="input-group" style="margin-bottom: 12px;">
+      <label for="text-color">文字顏色</label>
+      <input type="color" id="text-color" value="#ffffff">
     </div>
 
     <div class="input-group" style="margin-bottom: 12px;">

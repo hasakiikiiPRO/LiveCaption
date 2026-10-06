@@ -1,9 +1,16 @@
 # Python Virtual Environment
+venv/
 backend/.venv/
 backend/__pycache__/
 backend/build/
 backend/dist/
 backend/*.spec
+*.local.json
+.env
+
+# Chrome extension build artifacts
+*.crx
+*.pem
 
 # SenseVoice model directory and ONNX files
 backend/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17/

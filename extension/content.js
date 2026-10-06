@@ -2,145 +2,199 @@ let subtitleContainer = null;
 let clearTimer = null;
 let subtitleHistory = [];
 let maxHistoryLines = 0; // 0 = only show latest, 1 = latest + 1 history, 2 = latest + 2 history
+let isDragAttached = false;
 
 // Initialize subtitle overlay
 function initSubtitleOverlay() {
-  if (document.getElementById('studio0808-subtitle-container')) return;
-  
-  subtitleContainer = document.createElement('div');
-  subtitleContainer.id = 'studio0808-subtitle-container';
-  
-  // Inject styling directly into the DOM
-  const style = document.createElement('style');
-  style.textContent = `
+  // 1. Remove all legacy injected style tags (both with or without id)
+  document.querySelectorAll('style').forEach(st => {
+    if (st.id === 'studio0808-subtitle-style' || (st.textContent && st.textContent.includes('studio0808-subtitle-container'))) {
+      st.remove();
+    }
+  });
+
+  // 2. Inject modern 100% pure transparent subtitle styling
+  const styleEl = document.createElement('style');
+  styleEl.id = 'studio0808-subtitle-style';
+  styleEl.textContent = `
     #studio0808-subtitle-container {
-      position: fixed;
-      bottom: 8%;
-      left: 50%;
-      transform: translateX(-50%);
-      z-index: 2147483647;
-      width: 85%;
-      max-width: 750px;
-      padding: 12px 18px;
-      background: var(--subtitle-bg, rgba(10, 15, 25, 0.82));
-      backdrop-filter: blur(8px);
-      -webkit-backdrop-filter: blur(8px);
-      border: 1px solid rgba(255, 255, 255, 0.12);
-      border-radius: 12px;
-      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
-      text-align: center;
-      pointer-events: auto;
-      cursor: grab;
-      user-select: none;
+      position: fixed !important;
+      bottom: 8% !important;
+      left: 50% !important;
+      transform: translateX(-50%) !important;
+      z-index: 2147483647 !important;
+      width: max-content !important;
+      min-width: 0 !important;
+      max-width: 90vw !important;
+      padding: 0 !important;
+      margin: 0 !important;
+      background: transparent !important;
+      background-color: transparent !important;
+      background-image: none !important;
+      backdrop-filter: none !important;
+      -webkit-backdrop-filter: none !important;
+      border: none !important;
+      border-radius: 0 !important;
+      box-shadow: none !important;
+      outline: none !important;
+      text-align: center !important;
+      pointer-events: auto !important;
+      cursor: grab !important;
+      user-select: none !important;
       display: none;
       opacity: 0;
-      transition: opacity 0.25s ease, transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-      font-family: system-ui, -apple-system, sans-serif;
+      transition: opacity 0.2s ease;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif !important;
     }
     
     #studio0808-subtitle-container:active {
-      cursor: grabbing;
+      cursor: grabbing !important;
     }
     
     #studio0808-subtitle-container.visible {
-      opacity: 1;
-      transform: translateX(-50%) translateY(0);
+      opacity: 1 !important;
     }
     
     .studio0808-subtitle-line {
-      margin-bottom: 12px;
-      transition: opacity 0.25s ease, transform 0.25s ease;
+      background: transparent !important;
+      background-color: transparent !important;
+      background-image: none !important;
+      backdrop-filter: none !important;
+      -webkit-backdrop-filter: none !important;
+      border: none !important;
+      border-radius: 0 !important;
+      box-shadow: none !important;
+      outline: none !important;
+      margin-bottom: 6px !important;
+      padding: 0 !important;
     }
     
     .studio0808-subtitle-line:last-child {
-      margin-bottom: 0;
+      margin-bottom: 0 !important;
     }
     
-    /* Faded style for history lines */
     .studio0808-subtitle-line.history-line {
-      opacity: 0.45;
-      transform: scale(0.94);
-      margin-bottom: 8px;
+      opacity: 0.55 !important;
+      transform: scale(0.96) !important;
+      margin-bottom: 4px !important;
     }
     
     .studio0808-subtitle-raw-item {
-      font-size: calc(var(--subtitle-font-size-raw, 14px) * 0.95);
-      color: rgba(220, 225, 235, 0.75);
-      margin-bottom: 3px;
-      line-height: 1.4;
-      text-shadow: 0 2px 4px rgba(0, 0, 0, 0.8);
-      font-weight: 400;
+      background: transparent !important;
+      background-color: transparent !important;
+      background-image: none !important;
+      backdrop-filter: none !important;
+      -webkit-backdrop-filter: none !important;
+      border: none !important;
+      box-shadow: none !important;
+      outline: none !important;
+      font-size: calc(var(--subtitle-font-size-raw, 14px) * 0.95) !important;
+      color: rgba(235, 240, 255, 0.95) !important;
+      margin-bottom: 2px !important;
+      padding: 0 !important;
+      line-height: 1.35 !important;
+      text-shadow: 0 0 4px #000, 0 0 8px #000, 1px 1px 2px #000, -1px -1px 2px #000, 0 2px 4px rgba(0, 0, 0, 0.95) !important;
+      font-weight: 500 !important;
     }
     
     .studio0808-subtitle-zh-item {
-      font-size: var(--subtitle-font-size-zh, 19px);
-      color: var(--subtitle-color, #ffffff);
-      line-height: 1.4;
-      text-shadow: 0 2px 4px rgba(0, 0, 0, 0.9);
-      font-weight: 700;
+      background: transparent !important;
+      background-color: transparent !important;
+      background-image: none !important;
+      backdrop-filter: none !important;
+      -webkit-backdrop-filter: none !important;
+      border: none !important;
+      box-shadow: none !important;
+      outline: none !important;
+      font-size: var(--subtitle-font-size-zh, 20px) !important;
+      color: var(--subtitle-color, #ffffff) !important;
+      padding: 0 !important;
+      line-height: 1.35 !important;
+      text-shadow: 0 0 5px #000, 0 0 10px #000, 2px 2px 3px #000, -1px -1px 2px #000, 0 2px 4px rgba(0, 0, 0, 0.95) !important;
+      font-weight: 700 !important;
     }
   `;
-  
-  document.head.appendChild(style);
-  document.body.appendChild(subtitleContainer);
-  
-  // Load initial appearance settings from storage
-  chrome.storage.local.get(['bgColor', 'textColor', 'fontSize', 'historyLines'], (result) => {
-    const bg = result.bgColor || '#0a0f19';
+  document.head.appendChild(styleEl);
+
+  // 3. Obtain or create subtitleContainer
+  const existing = document.getElementById('studio0808-subtitle-container');
+  if (existing) {
+    subtitleContainer = existing;
+    subtitleContainer.style.removeProperty('--subtitle-bg');
+    subtitleContainer.style.background = 'transparent';
+    subtitleContainer.style.backgroundColor = 'transparent';
+    subtitleContainer.style.backgroundImage = 'none';
+    subtitleContainer.style.backdropFilter = 'none';
+    subtitleContainer.style.webkitBackdropFilter = 'none';
+    subtitleContainer.style.border = 'none';
+    subtitleContainer.style.borderRadius = '0';
+    subtitleContainer.style.boxShadow = 'none';
+    subtitleContainer.style.outline = 'none';
+  } else {
+    subtitleContainer = document.createElement('div');
+    subtitleContainer.id = 'studio0808-subtitle-container';
+    document.body.appendChild(subtitleContainer);
+  }
+
+  // 4. Always synchronize styles from storage
+  chrome.storage.local.get(['textColor', 'fontSize', 'historyLines'], (result) => {
     const text = result.textColor || '#ffffff';
     const size = result.fontSize || 'medium';
     maxHistoryLines = result.historyLines !== undefined ? parseInt(result.historyLines) : 0;
-    applySubtitleStyles(bg, text, size);
+    applySubtitleStyles(null, text, size);
   });
-  
-  // Drag and drop logic
-  let isDragging = false;
-  let startX, startY;
-  let initialX, initialY;
-  
-  subtitleContainer.addEventListener('mousedown', (e) => {
-    if (e.button !== 0) return; // Left click only
-    isDragging = true;
-    const rect = subtitleContainer.getBoundingClientRect();
-    subtitleContainer.style.transform = 'none';
-    subtitleContainer.style.left = rect.left + 'px';
-    subtitleContainer.style.top = rect.top + 'px';
-    subtitleContainer.style.bottom = 'auto';
-    startX = e.clientX;
-    startY = e.clientY;
-    initialX = rect.left;
-    initialY = rect.top;
-    e.preventDefault();
-  });
-  
-  document.addEventListener('mousemove', (e) => {
-    if (!isDragging) return;
-    const dx = e.clientX - startX;
-    const dy = e.clientY - startY;
-    subtitleContainer.style.left = (initialX + dx) + 'px';
-    subtitleContainer.style.top = (initialY + dy) + 'px';
-  });
-  
-  document.addEventListener('mouseup', () => { isDragging = false; });
-  
-  // Double click to reset to default position
-  subtitleContainer.addEventListener('dblclick', () => {
-    subtitleContainer.style.transform = 'translateX(-50%)';
-    subtitleContainer.style.left = '50%';
-    subtitleContainer.style.top = 'auto';
-    const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement;
-    if (fullscreenElement) {
-      subtitleContainer.style.position = 'absolute';
-      subtitleContainer.style.bottom = '10%';
-    } else {
-      subtitleContainer.style.position = 'fixed';
-      subtitleContainer.style.bottom = '8%';
-    }
-  });
-  
-  // Listen to Fullscreen Change Event
-  document.addEventListener('fullscreenchange', handleFullscreenChange);
-  document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
+
+  // 5. Drag and drop logic
+  if (!isDragAttached && subtitleContainer) {
+    isDragAttached = true;
+    let isDragging = false;
+    let startX, startY;
+    let initialX, initialY;
+    
+    subtitleContainer.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return; // Left click only
+      isDragging = true;
+      const rect = subtitleContainer.getBoundingClientRect();
+      subtitleContainer.style.transform = 'none';
+      subtitleContainer.style.left = rect.left + 'px';
+      subtitleContainer.style.top = rect.top + 'px';
+      subtitleContainer.style.bottom = 'auto';
+      startX = e.clientX;
+      startY = e.clientY;
+      initialX = rect.left;
+      initialY = rect.top;
+      e.preventDefault();
+    });
+    
+    document.addEventListener('mousemove', (e) => {
+      if (!isDragging) return;
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+      subtitleContainer.style.left = (initialX + dx) + 'px';
+      subtitleContainer.style.top = (initialY + dy) + 'px';
+    });
+    
+    document.addEventListener('mouseup', () => { isDragging = false; });
+    
+    // Double click to reset to default position
+    subtitleContainer.addEventListener('dblclick', () => {
+      subtitleContainer.style.transform = 'translateX(-50%)';
+      subtitleContainer.style.left = '50%';
+      subtitleContainer.style.top = 'auto';
+      const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement;
+      if (fullscreenElement) {
+        subtitleContainer.style.position = 'absolute';
+        subtitleContainer.style.bottom = '10%';
+      } else {
+        subtitleContainer.style.position = 'fixed';
+        subtitleContainer.style.bottom = '8%';
+      }
+    });
+    
+    // Listen to Fullscreen Change Event
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
+  }
 }
 
 function handleFullscreenChange() {
@@ -285,7 +339,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   
   if (message.type === 'update-styles') {
     initSubtitleOverlay();
-    applySubtitleStyles(message.bgColor, message.textColor, message.fontSize);
+    applySubtitleStyles(null, message.textColor, message.fontSize);
   }
   
   if (message.type === 'update-history-lines') {
@@ -305,32 +359,43 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 function applySubtitleStyles(bg, text, fontSize) {
   if (!subtitleContainer) return;
   
-  // Appends 'd1' (Hex for 82% opacity) to 6-digit hex colors to make it semi-transparent
-  let finalBg = bg;
-  if (bg.startsWith('#') && bg.length === 7) {
-    finalBg = bg + 'd1';
-  }
-  
-  subtitleContainer.style.setProperty('--subtitle-bg', finalBg);
-  subtitleContainer.style.setProperty('--subtitle-color', text);
-  subtitleContainer.style.setProperty('--subtitle-color-fade', text); 
+  // Enforce 100% pure transparent background - NO white box, NO frosted glass, NO borders, NO shadow
+  subtitleContainer.style.removeProperty('--subtitle-bg');
+  subtitleContainer.style.setProperty('background', 'transparent', 'important');
+  subtitleContainer.style.setProperty('background-color', 'transparent', 'important');
+  subtitleContainer.style.setProperty('background-image', 'none', 'important');
+  subtitleContainer.style.setProperty('backdrop-filter', 'none', 'important');
+  subtitleContainer.style.setProperty('-webkit-backdrop-filter', 'none', 'important');
+  subtitleContainer.style.setProperty('border', 'none', 'important');
+  subtitleContainer.style.setProperty('border-radius', '0', 'important');
+  subtitleContainer.style.setProperty('box-shadow', 'none', 'important');
+  subtitleContainer.style.setProperty('outline', 'none', 'important');
+  subtitleContainer.style.setProperty('width', 'max-content', 'important');
+  subtitleContainer.style.setProperty('min-width', '0', 'important');
+  subtitleContainer.style.setProperty('max-width', '90vw', 'important');
+  subtitleContainer.style.setProperty('padding', '0', 'important');
+  subtitleContainer.style.setProperty('margin', '0', 'important');
+
+  const textColor = text || '#ffffff';
+  subtitleContainer.style.setProperty('--subtitle-color', textColor);
+  subtitleContainer.style.setProperty('--subtitle-color-fade', textColor); 
   
   // Map selectors to specific font size scales
   let rawSize = '14px';
-  let zhSize = '19px';
+  let zhSize = '20px';
   
   if (fontSize === 'small') {
     rawSize = '12px';
     zhSize = '16px';
   } else if (fontSize === 'medium') {
     rawSize = '14px';
-    zhSize = '19px';
+    zhSize = '20px';
   } else if (fontSize === 'large') {
     rawSize = '18px';
-    zhSize = '24px';
+    zhSize = '25px';
   } else if (fontSize === 'xlarge') {
     rawSize = '22px';
-    zhSize = '28px';
+    zhSize = '30px';
   }
   
   subtitleContainer.style.setProperty('--subtitle-font-size-raw', rawSize);
@@ -349,4 +414,11 @@ function clearSubtitle() {
       }
     }, 250);
   }
+}
+
+// Automatically clean up old styles and initialize transparent overlay on load
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initSubtitleOverlay);
+} else {
+  initSubtitleOverlay();
 }

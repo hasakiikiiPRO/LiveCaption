@@ -127,13 +127,83 @@ LANG_MAP = {
     "de": "德文 (German)",
     "ru": "俄文 (Russian)",
 }
+ollama_online = False
+http_client = None
 
-async def translate_text(text: str, target_lang: str, ollama_url: str, model_name: str, deepseek_key: str = None) -> str:
+def get_http_client():
+    global http_client
+    if http_client is None or http_client.is_closed:
+        proxy_url = os.environ.get("HTTP_PROXY") or "http://127.0.0.1:7897"
+        http_client = httpx.AsyncClient(
+            proxy=proxy_url,
+            timeout=3.0,
+            limits=httpx.Limits(max_keepalive_connections=10, max_connections=20)
+        )
+    return http_client
+
+async def translate_text(text: str, target_lang: str, ollama_url: str, model_name: str, deepseek_key: str = None, source_lang: str = "auto", context_history: list = None) -> str:
     global ollama_online
     """
-    三軌翻譯引擎：支援線上 DeepSeek API、本機 Ollama、以及免費的 Google Translate API (終極備用)。
+    四軌翻譯引擎：支援高效能中繼 (Gemini 3.1 Flash-Lite)、線上 DeepSeek API、本機 Ollama、以及免費 Google Translate API。
     """
-    target_name = LANG_MAP.get(target_lang, "繁體中文")
+    target_name = LANG_MAP.get(target_lang, "簡體中文")
+
+    system_prompt = f"""你是一个顶级的影视汉化组字幕翻译专家，擅长日本影视剧、生活对话、恋爱及成人向情境对话翻译。
+【核心规则】
+1. 输入文本由实时语音识别（ASR）生成，常有同音错别字、吞音断句误差或杂音干扰（例如：两手识别为工手、何カップ被拆开、言わせて识别为言かせて、って聞いてない识别为スきいてない）。
+2. 你必须结合前文语境自动纠正错别字并脑补语义，严禁机械字面直译！
+3. 特殊术语与语境理解：
+   - カップ 指罩杯/胸围（如 D罩杯、G罩杯，绝非水杯/中杯）
+   - 聞いてない/聞いてないんですか 指没听说/没提前通知/没交代（绝非没听见/没听）
+   - 言わせる 指叫出声/求饶/呻吟
+   - 工手/両手 指双手
+   - 逝く/イく 指到了/高潮
+   - 奥 指深处/里面
+4. 语言风格要地道、自然、生活化、符合口语与影视剧情氛围。
+5. 只输出最终翻译好的{target_name}，绝不要任何解释、前缀或废话。"""
+
+    user_content = text
+    if context_history:
+        ctx_str = "\n".join([f"「{h}」" for h in context_history if h])
+        if ctx_str:
+            user_content = f"【前文语境参考】\n{ctx_str}\n\n【待翻译字幕】\n{text}"
+
+    # 0. 優先使用高速無審查中繼 API (Gemini 3.1 Flash-Lite，延遲超低、理解極佳)
+    local_cfg = {}
+    cfg_file = os.path.join(os.path.dirname(__file__), "config.local.json")
+    if os.path.exists(cfg_file):
+        try:
+            with open(cfg_file, "r", encoding="utf-8") as f:
+                local_cfg = json.load(f)
+        except Exception:
+            pass
+
+    relay_base = os.environ.get("ANTHROPIC_BASE_URL") or local_cfg.get("relay_base")
+    relay_key = os.environ.get("ANTHROPIC_API_KEY") or local_cfg.get("relay_key")
+    if relay_base and relay_key:
+        try:
+            async with httpx.AsyncClient(timeout=3.5) as client:
+                r = await client.post(
+                    f"{relay_base.rstrip('/')}/v1/messages",
+                    headers={
+                        "x-api-key": relay_key,
+                        "anthropic-version": "2023-06-01",
+                        "content-type": "application/json"
+                    },
+                    json={
+                        "model": "gemini-3.1-flash-lite",
+                        "max_tokens": 60,
+                        "system": system_prompt,
+                        "messages": [{"role": "user", "content": user_content}]
+                    }
+                )
+                if r.status_code == 200:
+                    res_json = r.json()
+                    for c in res_json.get("content", []):
+                        if c.get("type") == "text" and c.get("text"):
+                            return c.get("text").strip()
+        except Exception as e:
+            print(f"Gemini 3.1 Flash 翻譯調用失敗: {e}")
 
     # 1. 優先嘗試 DeepSeek API (若有提供 API Key)
     if deepseek_key and len(deepseek_key.strip()) > 10:
@@ -169,7 +239,7 @@ async def translate_text(text: str, target_lang: str, ollama_url: str, model_nam
                 f"原文字幕：{text}\n"
                 f"翻譯結果："
             )
-            async with httpx.AsyncClient(timeout=3.0) as client:
+            async with httpx.AsyncClient(timeout=0.6) as client:
                 response = await client.post(
                     f"{ollama_url}/api/generate",
                     json={
@@ -189,22 +259,23 @@ async def translate_text(text: str, target_lang: str, ollama_url: str, model_nam
             print("偵測到本機 Ollama 未啟動，本工作階段後續將自動跳過 Ollama，避免連線超時延遲。")
             ollama_online = False
 
-    # 3. 終極備用：免費 Google Translate Web API (免 Key、免配置、即開即用)
+    # 3. 終極備用：免費 Google Translate Web API (免 Key、免配置、即開即用，長連接池)
     try:
-        async with httpx.AsyncClient(timeout=3.0) as client:
-            url = "https://translate.googleapis.com/translate_a/single"
-            params = {
-                "client": "gtx",
-                "sl": "auto",
-                "tl": target_lang,
-                "dt": "t",
-                "q": text
-            }
-            response = await client.get(url, params=params)
-            if response.status_code == 200:
-                res_json = response.json()
-                translated = "".join([part[0] for part in res_json[0] if part[0]])
-                return translated.strip()
+        client = get_http_client()
+        url = "https://translate.googleapis.com/translate_a/single"
+        sl_code = source_lang if (source_lang and source_lang != "auto") else "auto"
+        params = {
+            "client": "dict-chrome-ex",
+            "sl": sl_code,
+            "tl": target_lang,
+            "dt": "t",
+            "q": text
+        }
+        response = await client.get(url, params=params)
+        if response.status_code == 200:
+            res_json = response.json()
+            translated = "".join([part[0] for part in res_json[0] if part[0]])
+            return translated.strip()
     except Exception as e:
         print(f"Google 翻譯失敗: {e}")
         
@@ -259,6 +330,7 @@ async def websocket_endpoint(websocket: WebSocket):
     deepseek_key = None
     source_lang = "auto"
     target_lang = "none"
+    dialogue_history = []  # 保存最近的對話歷史 (原文, 翻譯)，提供大模型語境推斷
 
     try:
         while True:
@@ -276,11 +348,12 @@ async def websocket_endpoint(websocket: WebSocket):
                         source_lang = config_data.get("source_lang", source_lang)
                         target_lang = config_data.get("target_lang", target_lang)
                         global ollama_online
-                        ollama_online = True
+                        if ollama_url and ("localhost" in ollama_url or "127.0.0.1" in ollama_url):
+                            ollama_online = False
                         
-                        # 動態重新設定 VAD 參數以降低延遲
-                        min_silence = config_data.get("min_silence", 0.5)
-                        max_speech = config_data.get("max_speech", 10.0)
+                        # 動態重新設定 VAD 參數：預設靜音切分壓低到 0.3s，單句上限 4s，顯著提升出字響應速度
+                        min_silence = min(float(config_data.get("min_silence", 0.3)), 0.3)
+                        max_speech = min(float(config_data.get("max_speech", 4.0)), 4.0)
                         
                         vad_config = sherpa_onnx.VadModelConfig(
                             silero_vad=sherpa_onnx.SileroVadModelConfig(
@@ -358,37 +431,76 @@ async def websocket_endpoint(websocket: WebSocket):
                                     raw_text = translated_text  # 同步為簡體
                                 print(f"ASR 識別 [{start_time:.2f}s] (中文本地 CC 轉換): {translated_text}")
                             else:
-                                # 進行翻譯
+                                duration = len(samples) / 16000.0
                                 print(f"ASR 識別 [{start_time:.2f}s] (目標語言 '{target_lang}'): {raw_text}")
-                                translated_text = await translate_text(
-                                    raw_text, target_lang, ollama_url, model_name, deepseek_key
+                                # 1. 立即上屏原文（0 延遲，50ms 內上屏）
+                                await websocket.send_json({
+                                    "event": "subtitle",
+                                    "text_raw": raw_text,
+                                    "text_zh": "⌛ 翻譯中...",
+                                    "start": start_time,
+                                    "duration": duration
+                                })
+                                
+                                # 2. 非阻塞背景非同步翻譯，絕不卡頓音訊接收管道
+                                ctx_snapshot = [f"{h[0]} ({h[1]})" for h in dialogue_history[-2:]]
+                                
+                                async def async_translate_and_update(cur_text, cur_start, cur_duration, cur_src_lang, f_path, cur_ctx):
+                                    translated_str = await translate_text(
+                                        cur_text, target_lang, ollama_url, model_name, deepseek_key, source_lang=cur_src_lang, context_history=cur_ctx
+                                    )
+                                    print(f"翻譯結果: {translated_str}")
+                                    dialogue_history.append((cur_text, translated_str))
+                                    if len(dialogue_history) > 6:
+                                        dialogue_history.pop(0)
+                                    try:
+                                        await websocket.send_json({
+                                            "event": "subtitle",
+                                            "text_raw": cur_text,
+                                            "text_zh": translated_str,
+                                            "start": cur_start,
+                                            "duration": cur_duration
+                                        })
+                                    except Exception:
+                                        pass
+                                    if f_path:
+                                        try:
+                                            abs_time = datetime.datetime.now().strftime("%H:%M:%S")
+                                            m, s = divmod(int(cur_start), 60)
+                                            h, m = divmod(m, 60)
+                                            rel_time = f"{h:02d}:{m:02d}:{s:02d}"
+                                            with open(f_path, "a", encoding="utf-8") as f:
+                                                f.write(f"### 🕒 [{abs_time} | 影片 {rel_time}]\n")
+                                                f.write(f"*   **原文**：{cur_text}\n")
+                                                f.write(f"*   **中文**：{translated_str}\n\n")
+                                        except Exception as file_err:
+                                            print(f"寫入紀錄檔失敗: {file_err}")
+                                
+                                asyncio.create_task(
+                                    async_translate_and_update(raw_text, start_time, duration, recognized_lang, transcript_file_path, ctx_snapshot)
                                 )
-                                print(f"翻譯結果: {translated_text}")
                             
-                            # 傳回給前端外掛
-                            await websocket.send_json({
-                                "event": "subtitle",
-                                "text_raw": raw_text,
-                                "text_zh": translated_text,
-                                "start": start_time,
-                                "duration": len(samples) / 16000.0
-                            })
-                            
-                            # 寫入本機逐字稿存檔
-                            if transcript_file_path:
-                                try:
-                                    abs_time = datetime.datetime.now().strftime("%H:%M:%S")
-                                    m, s = divmod(int(start_time), 60)
-                                    h, m = divmod(m, 60)
-                                    rel_time = f"{h:02d}:{m:02d}:{s:02d}"
-                                    
-                                    with open(transcript_file_path, "a", encoding="utf-8") as f:
-                                        f.write(f"### 🕒 [{abs_time} | 影片 {rel_time}]\n")
-                                        f.write(f"*   **原文**：{raw_text}\n")
-                                        f.write(f"*   **中文**：{translated_text}\n\n")
-                                except Exception as file_err:
-                                    print(f"寫入紀錄檔失敗: {file_err}")
-                            
+                            if target_lang in ["none", recognized_lang] or (recognized_lang == "zh" and target_lang in ["zh-TW", "zh-CN"]):
+                                # 傳回給前端外掛
+                                await websocket.send_json({
+                                    "event": "subtitle",
+                                    "text_raw": raw_text,
+                                    "text_zh": translated_text,
+                                    "start": start_time,
+                                    "duration": len(samples) / 16000.0
+                                })
+                                if transcript_file_path:
+                                    try:
+                                        abs_time = datetime.datetime.now().strftime("%H:%M:%S")
+                                        m, s = divmod(int(start_time), 60)
+                                        h, m = divmod(m, 60)
+                                        rel_time = f"{h:02d}:{m:02d}:{s:02d}"
+                                        with open(transcript_file_path, "a", encoding="utf-8") as f:
+                                            f.write(f"### 🕒 [{abs_time} | 影片 {rel_time}]\n")
+                                            f.write(f"*   **原文**：{raw_text}\n")
+                                            f.write(f"*   **中文**：{translated_text}\n\n")
+                                    except Exception as file_err:
+                                        print(f"寫入紀錄檔失敗: {file_err}")
                     local_vad.pop()
 
     except WebSocketDisconnect:

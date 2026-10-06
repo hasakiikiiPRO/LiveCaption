@@ -1,5 +1,6 @@
 // Elements
 const toggleBtn = document.getElementById('toggle-btn');
+const reloadBtn = document.getElementById('reload-btn');
 const connectionStatus = document.getElementById('connection-status');
 const captureStatus = document.getElementById('capture-status');
 const ollamaUrlInput = document.getElementById('ollama-url');
@@ -11,7 +12,9 @@ const uiLangInput = document.getElementById('ui-lang');
 const sourceLangInput = document.getElementById('source-lang');
 const targetLangInput = document.getElementById('target-lang');
 const showBilingualInput = document.getElementById('show-bilingual');
+const bgTransparentInput = document.getElementById('bg-transparent');
 const bgColorInput = document.getElementById('bg-color');
+const bgColorContainer = document.getElementById('bg-color-container');
 const textColorInput = document.getElementById('text-color');
 const fontSizeInput = document.getElementById('font-size');
 const historyLinesInput = document.getElementById('history-lines');
@@ -49,6 +52,7 @@ const i18n = {
     linkDeepseekGuide: '申請教學 →',
     labelDeepseekKey: 'DeepSeek API 金鑰',
     titleAppearance: '字幕外觀設定',
+    labelBgTransparent: '全透明底框 (電影字幕風格)',
     labelBgColor: '底框顏色',
     labelTextColor: '文字顏色',
     labelFontSize: '字幕文字大小',
@@ -96,6 +100,7 @@ const i18n = {
     linkDeepseekGuide: '申请教程 →',
     labelDeepseekKey: 'DeepSeek API 密钥',
     titleAppearance: '字幕外观设置',
+    labelBgTransparent: '全透明底框 (电影字幕风格)',
     labelBgColor: '底框颜色',
     labelTextColor: '文字颜色',
     labelFontSize: '字幕文字大小',
@@ -143,6 +148,7 @@ const i18n = {
     linkDeepseekGuide: 'How to apply →',
     labelDeepseekKey: 'DeepSeek API Key',
     titleAppearance: 'Subtitle Appearance',
+    labelBgTransparent: 'Transparent Background (Movie Style)',
     labelBgColor: 'Background Color',
     labelTextColor: 'Text Color',
     labelFontSize: 'Subtitle Font Size',
@@ -190,6 +196,7 @@ const i18n = {
     linkDeepseekGuide: '申請手順 →',
     labelDeepseekKey: 'DeepSeek API キー',
     titleAppearance: '字幕外観設定',
+    labelBgTransparent: '背景を完全に透明にする (映画風)',
     labelBgColor: '背景色',
     labelTextColor: '文字色',
     labelFontSize: '字幕文字サイズ',
@@ -237,6 +244,7 @@ const i18n = {
     linkDeepseekGuide: '신청 가이드 →',
     labelDeepseekKey: 'DeepSeek API 키',
     titleAppearance: '자막 모양 설정',
+    labelBgTransparent: '투명 배경 (영화 자막 스타일)',
     labelBgColor: '배경 색상',
     labelTextColor: '텍스트 색상',
     labelFontSize: '자막 텍스트 크기',
@@ -307,7 +315,14 @@ function applyLanguage(lang) {
   document.querySelector('label[for="deepseek-key"]').textContent = getTranslation(lang, 'labelDeepseekKey');
   
   document.getElementById('title-appearance').textContent = getTranslation(lang, 'titleAppearance');
-  document.querySelector('label[for="bg-color"]').textContent = getTranslation(lang, 'labelBgColor');
+  const labelBgTransparent = document.getElementById('label-bg-transparent');
+  if (labelBgTransparent) {
+    labelBgTransparent.textContent = getTranslation(lang, 'labelBgTransparent');
+  }
+  const labelBgColor = document.querySelector('label[for="bg-color"]');
+  if (labelBgColor) {
+    labelBgColor.textContent = getTranslation(lang, 'labelBgColor');
+  }
   document.querySelector('label[for="text-color"]').textContent = getTranslation(lang, 'labelTextColor');
   document.querySelector('label[for="font-size"]').textContent = getTranslation(lang, 'labelFontSize');
   
@@ -329,11 +344,10 @@ function applyLanguage(lang) {
   document.getElementById('footer-text').textContent = getTranslation(lang, 'footerText');
 }
 
-// Load settings from storage
 chrome.storage.local.get([
   'ollamaUrl', 'modelName', 'deepseekKey', 'minSilence', 'maxSpeech',
   'uiLang', 'sourceLang', 'targetLang', 'showBilingual',
-  'bgColor', 'textColor', 'fontSize', 'historyLines'
+  'bgColor', 'textColor', 'fontSize', 'historyLines', 'bgTransparent'
 ], (result) => {
   if (result.ollamaUrl) ollamaUrlInput.value = result.ollamaUrl;
   if (result.modelName) modelNameInput.value = result.modelName;
@@ -356,7 +370,13 @@ chrome.storage.local.get([
   } else {
     showBilingualInput.checked = true;
   }
-  if (result.bgColor) bgColorInput.value = result.bgColor;
+  if (bgTransparentInput) {
+    bgTransparentInput.checked = true;
+  }
+  if (bgColorContainer) {
+    bgColorContainer.style.display = 'none';
+  }
+  if (bgColorInput && result.bgColor) bgColorInput.value = result.bgColor;
   if (result.textColor) textColorInput.value = result.textColor;
   if (result.fontSize) fontSizeInput.value = result.fontSize;
   if (result.historyLines !== undefined) historyLinesInput.value = result.historyLines;
@@ -365,7 +385,6 @@ chrome.storage.local.get([
   applyLanguage(uiLangInput.value);
   updateStatus();
 });
-
 // Update settings in storage on input
 const saveSettings = () => {
   const settings = {
@@ -378,7 +397,8 @@ const saveSettings = () => {
     sourceLang: sourceLangInput.value,
     targetLang: targetLangInput.value,
     showBilingual: showBilingualInput.checked,
-    bgColor: bgColorInput.value,
+    bgTransparent: true,
+    bgColor: bgColorInput ? bgColorInput.value : 'transparent',
     textColor: textColorInput.value,
     fontSize: fontSizeInput.value,
     historyLines: parseInt(historyLinesInput.value)
@@ -396,9 +416,9 @@ const saveSettings = () => {
     if (tabs && tabs[0]) {
       chrome.tabs.sendMessage(tabs[0].id, {
         type: 'update-styles',
-        bgColor: settings.bgColor,
         textColor: settings.textColor,
-        fontSize: settings.fontSize
+        fontSize: settings.fontSize,
+        bgTransparent: true
       }).catch(() => {});
 
       chrome.tabs.sendMessage(tabs[0].id, {
@@ -428,10 +448,15 @@ sourceLangInput.addEventListener('change', saveSettings);
 targetLangInput.addEventListener('change', saveSettings);
 showBilingualInput.addEventListener('change', saveSettings);
 
-bgColorInput.addEventListener('input', saveSettings);
+if (bgColorInput) bgColorInput.addEventListener('input', saveSettings);
 textColorInput.addEventListener('input', saveSettings);
 fontSizeInput.addEventListener('change', saveSettings);
 historyLinesInput.addEventListener('change', saveSettings);
+if (bgTransparentInput) {
+  bgTransparentInput.addEventListener('change', () => {
+    saveSettings();
+  });
+}
 
 minSilenceInput.addEventListener('input', () => {
   updateVadLabels(uiLangInput.value);
@@ -521,3 +546,13 @@ toggleBtn.addEventListener('click', async () => {
     }
   }
 });
+
+if (reloadBtn) {
+  reloadBtn.addEventListener('click', () => {
+    reloadBtn.textContent = '🔄 重新載入中...';
+    reloadBtn.disabled = true;
+    setTimeout(() => {
+      chrome.runtime.reload();
+    }, 150);
+  });
+}
