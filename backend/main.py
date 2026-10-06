@@ -201,21 +201,43 @@ TTS_VOICE_MAP = {
 }
 DEFAULT_TTS_VOICE = "zh-CN-YunxiNeural"
 
+TTS_MAX_SPEEDUP = 0.5  # 最多 +50% 語速，再快就聽不清
+
+
+def estimate_tts_seconds(text: str) -> float:
+    """估算 Edge-TTS 在 +0% 語速下的朗讀時長（中文約 4.5 字/秒，英文詞約 0.35 秒，標點停頓約 0.25 秒）。"""
+    cjk = len(re.findall(r'[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]', text))
+    words = len(re.findall(r'[A-Za-z0-9]+', text))
+    pauses = len(re.findall(r'[，。！？；：、,.!?;:]', text))
+    return cjk / 4.5 + words * 0.35 + pauses * 0.25 + 0.3
+
+
+def fit_tts_rate(text: str, slot_seconds: float) -> str:
+    """依原句時長給出 Edge-TTS 語速參數，讓配音盡量不比原句長；由 TTS 引擎調速，音高不變。"""
+    if not slot_seconds or slot_seconds <= 0.5:
+        return "+0%"
+    ratio = estimate_tts_seconds(text) / slot_seconds
+    if ratio <= 1.0:
+        return "+0%"
+    pct = int(round(min(ratio - 1.0, TTS_MAX_SPEEDUP) * 100))
+    return f"+{pct}%"
+
+
 async def synthesize_edge_tts(text: str, voice: str = None, rate: str = "+0%") -> bytes:
-    """使用 Edge-TTS 合成 MP3 音訊字節：第1次走代理，若遇網絡超時立即自動切換直連兜底，雙軌抗抖動。"""
+    """使用 Edge-TTS 合成 MP3 音訊字節：先直連（實測 2-7 s，較穩），失敗再走代理（實測 6-10 s，常斷），最後再試一次直連。"""
     if not text or not text.strip():
         return b""
     clean_text = text.strip()
     target_voice = TTS_VOICE_MAP.get(voice, voice or DEFAULT_TTS_VOICE)
     proxy_url = os.environ.get("HTTP_PROXY") or "http://127.0.0.1:7897"
 
-    # 双轨尝试：第一次代理，第二次直连
-    attempts = [proxy_url, None]
-    for idx, p in enumerate(attempts):
+    # 微軟 TTS 連線偶發超時，多試一次直連，避免整句漏配
+    attempts = [(None, 10.0), (proxy_url, 12.0), (None, 10.0)]
+    for idx, (p, total_timeout) in enumerate(attempts):
         try:
-            comm = edge_tts.Communicate(clean_text, target_voice, rate=rate, proxy=p, connect_timeout=3, receive_timeout=5)
+            comm = edge_tts.Communicate(clean_text, target_voice, rate=rate, proxy=p, connect_timeout=5, receive_timeout=5)
             buf = bytearray()
-            async with asyncio.timeout(4.0):
+            async with asyncio.timeout(total_timeout):
                 async for chunk in comm.stream():
                     if chunk["type"] == "audio":
                         buf.extend(chunk["data"])
@@ -299,7 +321,7 @@ async def translate_text(text: str, target_lang: str, ollama_url: str, model_nam
                     },
                     json={
                         "model": "gemini-3.1-flash-lite",
-                        "max_tokens": 60,
+                        "max_tokens": 300,
                         "system": system_prompt,
                         "messages": [{"role": "user", "content": user_content}]
                     }
@@ -591,8 +613,9 @@ async def websocket_endpoint(websocket: WebSocket):
                                     # 3. 若啟用同傳配音，非同步合成並推送音訊
                                     if is_dub and translated_str and not translated_str.startswith("[未翻譯]"):
                                         try:
-                                            print(f"正在為譯文生成同傳配音 (音色: {voice_name}): {translated_str}")
-                                            dub_bytes = await synthesize_edge_tts(translated_str, voice=voice_name)
+                                            dub_rate = fit_tts_rate(translated_str, cur_duration)
+                                            print(f"正在為譯文生成同傳配音 (音色: {voice_name}, 語速 {dub_rate}): {translated_str}")
+                                            dub_bytes = await synthesize_edge_tts(translated_str, voice=voice_name, rate=dub_rate)
                                             if dub_bytes:
                                                 print(f"同傳配音合成成功，大小: {len(dub_bytes)} bytes，正在推送至前端...")
                                                 await websocket.send_json({
@@ -637,7 +660,7 @@ async def websocket_endpoint(websocket: WebSocket):
                                     cur_txt = translated_text
                                     async def async_direct_tts(text_val, s_val, d_val, v_val):
                                         try:
-                                            d_bytes = await synthesize_edge_tts(text_val, voice=v_val)
+                                            d_bytes = await synthesize_edge_tts(text_val, voice=v_val, rate=fit_tts_rate(text_val, d_val))
                                             if d_bytes:
                                                 await websocket.send_json({
                                                     "event": "dubbing_audio",

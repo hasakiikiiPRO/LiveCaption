@@ -10,6 +10,12 @@ let ws = null;
 let config = {};
 let reconnectTimer = null;
 let reconnectDelay = 1000;
+// 已送往後端的音訊總時長（秒），與後端 VAD 時間戳同一時間軸
+let streamSecondsSent = 0;
+// 拖動進度條後，丟棄時間戳早於此刻的在途配音
+let dropDubsBefore = 0;
+// 配音落後原聲超過此秒數就跳過，避免越積越遲
+const MAX_DUB_LAG_SECONDS = 8;
 
 chrome.runtime.onMessage.addListener(async (message) => {
   if (message.target !== 'offscreen') return;
@@ -26,6 +32,7 @@ chrome.runtime.onMessage.addListener(async (message) => {
 
   if (message.type === 'video-control') {
     if (message.action === 'seek' || message.action === 'stop-stale') {
+      dropDubsBefore = streamSecondsSent;
       dubbingQueue = [];
       if (currentDubSource) {
         try { currentDubSource.stop(); } catch (e) {}
@@ -110,6 +117,7 @@ async function startRecording(streamId) {
       
       // Send binary data over WS
       ws.send(int16Buffer.buffer);
+      streamSecondsSent += int16Buffer.length / 16000;
     };
     
   } catch (err) {
@@ -131,6 +139,10 @@ function connectWebSocket() {
   ws.onopen = () => {
     console.log("WebSocket backend connected successfully.");
     reconnectDelay = 1000; // Reset delay
+    // 後端每條連線從 0 開始計時
+    streamSecondsSent = 0;
+    dropDubsBefore = 0;
+    dubbingQueue = [];
     chrome.runtime.sendMessage({
       target: 'background',
       type: 'websocket-connected'
@@ -185,26 +197,42 @@ function enqueueDubbingAudio(item) {
   if (!config.dubbingEnabled && !config.dubbing_enabled) {
     return;
   }
-  // 隊列積壓保護：若堆積超過 2 句，丟棄過早的陳舊音訊，防止時延惡性膨脹
-  if (dubbingQueue.length >= 2) {
-    console.warn("Dubbing queue backlog exceeded, dropping stale items to catch up.");
-    dubbingQueue.splice(0, dubbingQueue.length - 1);
-  }
-  dubbingQueue.push(item);
+  const start = Number(item.start) || 0;
+  if (start < dropDubsBefore) return;
+  // 翻譯與合成並行進行，到達順序不一定等於說話順序，按原句時間插入
+  let i = dubbingQueue.length;
+  while (i > 0 && (Number(dubbingQueue[i - 1].start) || 0) > start) i--;
+  dubbingQueue.splice(i, 0, item);
   if (!isPlayingDub) {
     playNextDubbing();
   }
+}
+
+function takeNextDub() {
+  while (dubbingQueue.length > 0) {
+    const item = dubbingQueue.shift();
+    const start = Number(item.start) || 0;
+    const end = start + (Number(item.duration) || 0);
+    if (start < dropDubsBefore) continue;
+    // 只在嚴重落後時跳過；後面還有句子等著才跳，避免最後一句被吞
+    if (dubbingQueue.length > 0 && streamSecondsSent - end > MAX_DUB_LAG_SECONDS) {
+      console.warn(`Dubbing lag ${(streamSecondsSent - end).toFixed(1)}s, skipping: ${item.text}`);
+      continue;
+    }
+    return item;
+  }
+  return null;
 }
 
 async function playNextDubbing() {
   if (!playbackContext || playbackContext.state === 'closed') return;
   
   const targetDuckVol = (config.duckingVolume !== undefined) ? Number(config.duckingVolume) : 0.10;
+  const item = takeNextDub();
   
-  if (dubbingQueue.length === 0) {
+  if (!item) {
     isPlayingDub = false;
     currentDubSource = null;
-    // 250ms 平滑漸變回 1.0 原聲音量
     if (duckingGain) {
       const now = playbackContext.currentTime;
       duckingGain.gain.cancelScheduledValues(now);
@@ -213,7 +241,7 @@ async function playNextDubbing() {
     return;
   }
   
-  const item = dubbingQueue.shift();
+  isPlayingDub = true;
   try {
     const binaryStr = atob(item.audio_base64);
     const bytes = new Uint8Array(binaryStr.length);
@@ -222,45 +250,26 @@ async function playNextDubbing() {
     }
     
     const audioBuffer = await playbackContext.decodeAudioData(bytes.buffer.slice(0));
-    const dubDuration = audioBuffer.duration;
-    const origDuration = (item.duration && Number(item.duration) > 0) ? Number(item.duration) : dubDuration;
+    // 解碼期間可能發生了拖動或關閉
+    if (!playbackContext || playbackContext.state === 'closed') return;
+    // 解碼期間被拖動：拖動已重置播放狀態，之後到達的配音會開新的播放鏈，這裡直接結束
+    if ((Number(item.start) || 0) < dropDubsBefore) return;
     
-    // 自適應語速鎖步：若配音長度超過原聲，微調語速 (1.0x - 1.25x) 確保在原句結束前及時念完
-    let speedRatio = 1.0;
-    if (dubDuration > origDuration && origDuration > 0.5) {
-      speedRatio = Math.min(1.25, Math.max(1.0, dubDuration / origDuration));
-    }
-
-    // 發送配音就緒訊號給標籤頁，用於解鎖開頭預熱對齊微頓
-    chrome.runtime.sendMessage({
-      target: 'background',
-      type: 'dubbing-ready',
-      data: {
-        text: item.text,
-        start: item.start,
-        duration: origDuration,
-        speedRatio: speedRatio
-      }
-    });
-    
-    // 平滑壓低原聲音量 (80ms 快速淡出到 duckingVolume)
     if (duckingGain) {
       const now = playbackContext.currentTime;
       duckingGain.gain.cancelScheduledValues(now);
       duckingGain.gain.setTargetAtTime(Math.max(0.0, Math.min(1.0, targetDuckVol)), now, 0.025);
     }
     
+    // 語速由後端 Edge-TTS 依原句時長調整（音高不變），這裡按原速播放
     const source = playbackContext.createBufferSource();
     source.buffer = audioBuffer;
-    source.playbackRate.value = speedRatio;
     source.connect(playbackContext.destination);
     currentDubSource = source;
-    isPlayingDub = true;
     
     source.onended = () => {
-      if (currentDubSource === source) {
-        currentDubSource = null;
-      }
+      if (currentDubSource !== source) return; // 已被拖動/清理中止
+      currentDubSource = null;
       playNextDubbing();
     };
     source.start(0);

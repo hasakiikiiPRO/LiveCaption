@@ -368,7 +368,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const targetLang = message.targetLang || 'none';
     const showBilingual = message.showBilingual !== false;
     isDubbingActive = !!message.dubbingEnabled;
-    isPrerollSyncEnabled = (message.prerollSync !== false);
     renderHistorySubtitles(targetLang, showBilingual);
   }
   
