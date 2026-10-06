@@ -202,36 +202,27 @@ TTS_VOICE_MAP = {
 DEFAULT_TTS_VOICE = "zh-CN-YunxiNeural"
 
 async def synthesize_edge_tts(text: str, voice: str = None, rate: str = "+0%") -> bytes:
-    """使用 Edge-TTS 合成 MP3 音訊字節，優先使用代理，超時限制約 3.5s。"""
+    """使用 Edge-TTS 合成 MP3 音訊字節，優先走代理並自帶 1 次快速重試，超時限制嚴格把控，失敗靜默跳過不阻礙字幕。"""
     if not text or not text.strip():
         return b""
     clean_text = text.strip()
     target_voice = TTS_VOICE_MAP.get(voice, voice or DEFAULT_TTS_VOICE)
     proxy_url = os.environ.get("HTTP_PROXY") or "http://127.0.0.1:7897"
 
-    # 先嘗試走代理
-    try:
-        comm = edge_tts.Communicate(clean_text, target_voice, rate=rate, proxy=proxy_url, connect_timeout=3, receive_timeout=6)
-        buf = bytearray()
-        async with asyncio.timeout(4.0):
-            async for chunk in comm.stream():
-                if chunk["type"] == "audio":
-                    buf.extend(chunk["data"])
-        if buf:
-            return bytes(buf)
-    except Exception as e:
-        # 代理失敗則嘗試直連一次
+    for attempt in range(2):
         try:
-            comm = edge_tts.Communicate(clean_text, target_voice, rate=rate, proxy=None, connect_timeout=3, receive_timeout=6)
+            comm = edge_tts.Communicate(clean_text, target_voice, rate=rate, proxy=proxy_url, connect_timeout=4, receive_timeout=6)
             buf = bytearray()
-            async with asyncio.timeout(4.0):
+            async with asyncio.timeout(5.0):
                 async for chunk in comm.stream():
                     if chunk["type"] == "audio":
                         buf.extend(chunk["data"])
             if buf:
                 return bytes(buf)
-        except Exception as e2:
-            print(f"Edge-TTS 合成失敗（{type(e2).__name__}）: {e2}")
+        except Exception as e:
+            if attempt == 1:
+                print(f"Edge-TTS 合成失敗（{type(e).__name__}）: {e}")
+            await asyncio.sleep(0.1)
     return b""
 
 
@@ -525,17 +516,22 @@ async def websocket_endpoint(websocket: WebSocket):
                                 recognized_lang = "ko"
 
                             # 判定是否需要翻譯
-                            if target_lang == "none":
+                            effective_target_lang = target_lang
+                            # 智能守護：若啟用同傳配音且原音為外語，但目標語言為 none，自動提升為中文以完成同傳，防止用外語生肉朗讀
+                            if dubbing_enabled and effective_target_lang == "none" and recognized_lang != "zh":
+                                effective_target_lang = "zh-CN"
+
+                            if effective_target_lang == "none":
                                 # 僅顯示原文
                                 translated_text = raw_text
                                 print(f"ASR 識別 [{start_time:.2f}s] (僅顯示原文): {raw_text}")
-                            elif target_lang == recognized_lang:
+                            elif effective_target_lang == recognized_lang:
                                 # 識別語言與目標翻譯語言一致，跳過翻譯
                                 translated_text = raw_text
-                                print(f"ASR 識別 [{start_time:.2f}s] (識別與目標一致 '{target_lang}'，跳過翻譯): {raw_text}")
-                            elif recognized_lang == "zh" and target_lang in ["zh-TW", "zh-CN"]:
+                                print(f"ASR 識別 [{start_time:.2f}s] (識別與目標一致 '{effective_target_lang}'，跳過翻譯): {raw_text}")
+                            elif recognized_lang == "zh" and effective_target_lang in ["zh-TW", "zh-CN"]:
                                 # 都是中文，使用本地 OpenCC
-                                if target_lang == "zh-TW":
+                                if effective_target_lang == "zh-TW":
                                     translated_text = cc_s2t.convert(raw_text)
                                     raw_text = translated_text  # 同步為繁體，方便前端去重
                                 else:
@@ -543,7 +539,7 @@ async def websocket_endpoint(websocket: WebSocket):
                                     raw_text = translated_text  # 同步為簡體
                                 print(f"ASR 識別 [{start_time:.2f}s] (中文本地 CC 轉換): {translated_text}")
                             else:
-                                print(f"ASR 識別 [{start_time:.2f}s] (目標語言 '{target_lang}'): {raw_text}")
+                                print(f"ASR 識別 [{start_time:.2f}s] (目標語言 '{effective_target_lang}'): {raw_text}")
                                 # 1. 立即上屏原文（0 延遲，50ms 內上屏）
                                 await websocket.send_json({
                                     "event": "subtitle",
@@ -556,10 +552,12 @@ async def websocket_endpoint(websocket: WebSocket):
                                 # 2. 非阻塞背景非同步翻譯，絕不卡頓音訊接收管道
                                 ctx_snapshot = [f"{h[0]} ({h[1]})" for h in dialogue_history[-2:]]
                                 cur_preset = preset
+                                cur_dub_enabled = dubbing_enabled
+                                cur_voice = tts_voice
                                 
-                                async def async_translate_and_update(cur_text, cur_start, cur_duration, cur_src_lang, f_path, cur_ctx, cur_pr):
+                                async def async_translate_and_update(cur_text, cur_start, cur_duration, cur_src_lang, f_path, cur_ctx, cur_pr, cur_target, is_dub, voice_name):
                                     translated_str = await translate_text(
-                                        cur_text, target_lang, ollama_url, model_name, deepseek_key, source_lang=cur_src_lang, context_history=cur_ctx, preset=cur_pr
+                                        cur_text, cur_target, ollama_url, model_name, deepseek_key, source_lang=cur_src_lang, context_history=cur_ctx, preset=cur_pr
                                     )
                                     print(f"翻譯結果: {translated_str}")
                                     dialogue_history.append((cur_text, translated_str))
@@ -589,10 +587,12 @@ async def websocket_endpoint(websocket: WebSocket):
                                             print(f"寫入紀錄檔失敗: {file_err}")
                                     
                                     # 3. 若啟用同傳配音，非同步合成並推送音訊
-                                    if dubbing_enabled and translated_str and not translated_str.startswith("[未翻譯]"):
+                                    if is_dub and translated_str and not translated_str.startswith("[未翻譯]"):
                                         try:
-                                            dub_bytes = await synthesize_edge_tts(translated_str, voice=tts_voice)
+                                            print(f"正在為譯文生成同傳配音 (音色: {voice_name}): {translated_str}")
+                                            dub_bytes = await synthesize_edge_tts(translated_str, voice=voice_name)
                                             if dub_bytes:
+                                                print(f"同傳配音合成成功，大小: {len(dub_bytes)} bytes，正在推送至前端...")
                                                 await websocket.send_json({
                                                     "event": "dubbing_audio",
                                                     "text": translated_str,
@@ -604,10 +604,10 @@ async def websocket_endpoint(websocket: WebSocket):
                                             print(f"生成同傳配音失敗: {dub_err}")
                                 
                                 asyncio.create_task(
-                                    async_translate_and_update(raw_text, start_time, duration, recognized_lang, transcript_file_path, ctx_snapshot, cur_preset)
+                                    async_translate_and_update(raw_text, start_time, duration, recognized_lang, transcript_file_path, ctx_snapshot, cur_preset, effective_target_lang, cur_dub_enabled, cur_voice)
                                 )
                             
-                            if target_lang in ["none", recognized_lang] or (recognized_lang == "zh" and target_lang in ["zh-TW", "zh-CN"]):
+                            if effective_target_lang in ["none", recognized_lang] or (recognized_lang == "zh" and effective_target_lang in ["zh-TW", "zh-CN"]):
                                 # 傳回給前端外掛
                                 await websocket.send_json({
                                     "event": "subtitle",

@@ -346,6 +346,50 @@ function getTranslation(lang, key) {
   return dict[key] || i18n['en'][key] || '';
 }
 
+function updateDubbingLangInfo() {
+  const infoEl = document.getElementById('dubbing-lang-info');
+  if (!infoEl) return;
+  const target = targetLangInput ? targetLangInput.value : 'none';
+  const isZhTw = uiLangInput && uiLangInput.value === 'zh-TW';
+  
+  const targetMap = isZhTw ? {
+    'zh-CN': '簡體中文',
+    'zh-TW': '繁體中文',
+    'en': '英文 (English)',
+    'ja': '日文 (Japanese)',
+    'ko': '韓文 (Korean)',
+    'es': '西班牙文',
+    'fr': '法文',
+    'de': '德文',
+    'ru': '俄文'
+  } : {
+    'zh-CN': '简体中文',
+    'zh-TW': '繁体中文',
+    'en': '英文 (English)',
+    'ja': '日文 (Japanese)',
+    'ko': '韩文 (Korean)',
+    'es': '西班牙文',
+    'fr': '法文',
+    'de': '德文',
+    'ru': '俄文'
+  };
+
+  if (target === 'none') {
+    infoEl.innerHTML = isZhTw
+      ? `⚠️ <strong>目前為「僅顯示原文」</strong>：配音將朗讀原聲語言。若需中文同傳，請在上方選擇中文翻譯。`
+      : `⚠️ <strong>当前为“仅显示原文”</strong>：配音将朗读原声语言。若需中文同传，请在上方选择中文翻译。`;
+    infoEl.parentElement.style.borderLeftColor = '#f59e0b';
+    infoEl.parentElement.style.background = 'rgba(245, 158, 11, 0.1)';
+  } else {
+    const langName = targetMap[target] || target;
+    infoEl.innerHTML = isZhTw
+      ? `🔊 配音朗讀語種：<strong>${langName}</strong>（自動跟隨字幕翻譯）`
+      : `🔊 配音朗读语种：<strong>${langName}</strong>（自动跟随字幕翻译）`;
+    infoEl.parentElement.style.borderLeftColor = '#0284c7';
+    infoEl.parentElement.style.background = 'rgba(2, 132, 199, 0.08)';
+  }
+}
+
 function updateVadLabels(lang) {
   const minVal = minSilenceInput.value;
   const maxVal = maxSpeechInput.value;
@@ -495,6 +539,7 @@ chrome.storage.local.get([
 
   // Apply localization initially
   applyLanguage(uiLangInput.value);
+  updateDubbingLangInfo();
   updateStatus();
 });
 // Update settings in storage on input
@@ -562,7 +607,10 @@ uiLangInput.addEventListener('change', () => {
   updateStatus();
 });
 sourceLangInput.addEventListener('change', saveSettings);
-targetLangInput.addEventListener('change', saveSettings);
+targetLangInput.addEventListener('change', () => {
+  updateDubbingLangInfo();
+  saveSettings();
+});
 if (promptPresetInput) promptPresetInput.addEventListener('change', saveSettings);
 showBilingualInput.addEventListener('change', saveSettings);
 
@@ -578,7 +626,12 @@ if (bgTransparentInput) {
 
 if (dubbingEnabledInput) {
   dubbingEnabledInput.addEventListener('change', () => {
+    if (dubbingEnabledInput.checked && targetLangInput && targetLangInput.value === 'none') {
+      // 智能聯動：啟用同傳配音時，若翻譯語言仍為「僅顯示原文」，自動切換至中文
+      targetLangInput.value = (uiLangInput.value === 'zh-CN') ? 'zh-CN' : 'zh-TW';
+    }
     dubbingSettingsPanel.style.display = dubbingEnabledInput.checked ? 'block' : 'none';
+    updateDubbingLangInfo();
     saveSettings();
   });
 }

@@ -77,11 +77,13 @@ async def run_e2e():
             try:
                 async for msg in ws:
                     d = json.loads(msg)
-                    if d.get("event") == "subtitle":
+                    ev = d.get("event")
+                    print(f"WS Client received event: {ev}")
+                    if ev == "subtitle":
                         subtitles.append(d)
-                    elif d.get("event") == "dubbing_audio":
+                    elif ev == "dubbing_audio":
                         dubbing_audios.append(d)
-            except Exception:
+            except Exception as e:
                 pass
                 
         r_task = asyncio.create_task(reader())
@@ -90,8 +92,8 @@ async def run_e2e():
             await ws.send(c)
             await asyncio.sleep(0.01)
             
-        # 等待后台翻译与 Edge-TTS 合成返回（通常在 3-5 秒内完成）
-        for _ in range(35):
+        # 等待后台翻译与 Edge-TTS 合成返回（通常在 3-8 秒内完成）
+        for _ in range(100):
             if len(dubbing_audios) > 0:
                 break
             await asyncio.sleep(0.2)
